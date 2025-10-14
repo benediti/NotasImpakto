@@ -45,9 +45,15 @@ def extract_file_id(upload_resp: dict) -> str:
     for k in ("FileId", "fileId", "id", "Id", "ID"):
         if isinstance(upload_resp, dict) and upload_resp.get(k):
             return str(upload_resp[k])
-    for v in (upload_resp or {}).values():
-        if isinstance(v, dict):
-            fid = extract_file_id(v)
+    if isinstance(upload_resp, dict):
+        for v in upload_resp.values():
+            if isinstance(v, dict) or isinstance(v, list):
+                fid = extract_file_id(v)
+                if fid:
+                    return fid
+    elif isinstance(upload_resp, list):
+        for item in upload_resp:
+            fid = extract_file_id(item)
             if fid:
                 return fid
     return ""
