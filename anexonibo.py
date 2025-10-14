@@ -26,9 +26,13 @@ def nibo_headers(json_body: bool = False) -> dict:
         h["Content-Type"] = "application/json"
     return h
 
-def upload_file_to_nibo(file_name: str, file_bytes: bytes) -> dict:
+def upload_file_to_nibo(file_name: str, file_bytes: bytes, content_type: str = None) -> dict:
     url = f"{BASE}/files"
-    files = {"file": (file_name, file_bytes)}
+    # Inclui o content_type se informado
+    if content_type:
+        files = {"file": (file_name, file_bytes, content_type)}
+    else:
+        files = {"file": (file_name, file_bytes)}
     r = requests.post(url, headers=nibo_headers(), files=files, timeout=60)
     if r.status_code >= 400:
         raise RuntimeError(f"Falha no upload ({r.status_code}): {r.text}")
@@ -178,7 +182,8 @@ if st.button("Fazer upload"):
         saved = []
         for up in uploads:
             try:
-                resp = upload_file_to_nibo(up.name, up.getvalue())
+                # Passa o tipo do arquivo para a função
+                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
                 fid = extract_file_id(resp)
                 saved.append({"name": up.name, "fileId": fid, "raw": resp})
                 if fid:
