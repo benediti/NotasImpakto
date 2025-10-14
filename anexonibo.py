@@ -2,46 +2,41 @@ import os
 import json
 import requests
 import streamlit as st
+from datetime import date
 
-NIBO_BASE = "https://api.nibo.com.br/empresas/v1"
+BASE = "https://api.nibo.com.br/empresas/v1"
 
-def nibo_headers():
-    headers = {
-        "X-API-Key": os.environ.get("NIBO_API_KEY", "").strip(),
-        # o upload usa multipart, então não definir content-type fixo aqui
-        "Accept": "application/json",
-    }
-    user_id = os.environ.get("NIBO_USER_ID", "").strip()
-    if user_id:
-        headers["X-User-Id"] = user_id
-    return headers
+# ---------- Helpers de autenticação ----------
+def nibo_headers(json_body: bool = False) -> dict:
+    """
+    Empresa API do Nibo aceita o token como header 'ApiToken' (ou via query 'apitoken').
+    Preferimos o header, conforme doc oficial.
+    """
+    api_token = os.environ.get("NIBO_API_TOKEN") or os.environ.get("NIBO_API_KEY") or ""
+    if not api_token:
+        st.warning("Defina a variável de ambiente NIBO_API_TOKEN (ou NIBO_API_KEY).")
+    h = {"ApiToken": api_token, "Accept": "application/json"}
+    if json_body:
+        h["Content-Type"] = "application/json"
+    return h
 
+# ---------- Upload ----------
 def upload_file_to_nibo(file_name: str, file_bytes: bytes) -> dict:
-    """
-    Faz upload de UM arquivo para o Nibo e retorna o JSON de resposta.
-    Doc: POST /files (multipart/form-data, campo 'file'). Retorna um FileId. (204 na doc de attach)
-    """
-    url = f"{NIBO_BASE}/files"
+    url = f"{BASE}/files"
     files = {"file": (file_name, file_bytes)}
     r = requests.post(url, headers=nibo_headers(), files=files, timeout=60)
     if r.status_code >= 400:
         raise RuntimeError(f"Falha no upload ({r.status_code}): {r.text}")
-    # Algumas rotas do Nibo retornam corpo JSON; trate ambos os casos
     try:
         return r.json()
     except ValueError:
-        # Sem JSON – tentar extrair FileId de header/location não documentado
         return {"raw": r.text}
 
 def extract_file_id(upload_resp: dict) -> str:
-    """
-    Tenta encontrar o id do arquivo em respostas com formatos diferentes.
-    """
-    candidates = ["fileId", "FileId", "id", "Id", "ID"]
-    for k in candidates:
-        if isinstance(upload_resp, dict) and k in upload_resp and upload_resp[k]:
+    for k in ("FileId", "fileId", "id", "Id", "ID"):
+        if isinstance(upload_resp, dict) and upload_resp.get(k):
             return str(upload_resp[k])
-    # às vezes a resposta vem aninhada
+    # nested
     for v in (upload_resp or {}).values():
         if isinstance(v, dict):
             fid = extract_file_id(v)
@@ -49,70 +44,171 @@ def extract_file_id(upload_resp: dict) -> str:
                 return fid
     return ""
 
-def attach_files_to_schedule(schedule_id: str, file_ids: list[str]) -> tuple[bool, str]:
+# ---------- Listagens (abertos) ----------
+def list_open_schedules(kind: str, top: int = 50, orderby: str = "dueDate desc", extra_filter: str = "") -> list[dict]:
     """
-    Anexa arquivos ao agendamento de pagamento.
-    Doc: POST /schedules/debit/{scheduleId}/files/attach  (retorna 204 se ok)
-    Como o corpo não está 100% explícito no HTML, tentamos alguns formatos comuns.
+    kind: 'debit' (pagamentos) ou 'credit' (recebimentos)
+    Usa endpoints /schedules/{kind}/opened com OData ($orderby, $top e $filter).
     """
-    url = f"{NIBO_BASE}/schedules/debit/{schedule_id}/files/attach"
-    headers = nibo_headers() | {"Content-Type": "application/json"}
+    assert kind in ("debit", "credit")
+    url = f"{BASE}/schedules/{kind}/opened"
+    params = {"$orderby": orderby, "$top": str(top)}
+    if extra_filter.strip():
+        params["$filter"] = extra_filter
+    r = requests.get(url, headers=nibo_headers(), params=params, timeout=60)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Erro ao listar {kind} abertos ({r.status_code}): {r.text}")
+    data = r.json()
+    # respostas do Nibo geralmente trazem 'items' ou lista direta; lidamos com ambos
+    if isinstance(data, dict) and "items" in data:
+        return data["items"] or []
+    if isinstance(data, list):
+        return data
+    # fallback
+    return data.get("value") or data.get("results") or []
 
-    payload_variants = [
-        {"filesIds": file_ids},
+def schedule_label(it: dict) -> str:
+    """
+    Cria um rótulo amigável para exibir no select (tenta pegar campos comuns).
+    """
+    sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId") or ""
+    desc = it.get("description") or it.get("title") or ""
+    due = it.get("dueDate") or it.get("due") or it.get("due_date") or ""
+    val = it.get("value") or it.get("amount") or ""
+    # stakeholder aninhado costuma vir como stakeholder/name, tentamos algumas chaves
+    stakeholder = (
+        (it.get("stakeholder") or {}).get("name")
+        or (it.get("client") or {}).get("name")
+        or (it.get("supplier") or {}).get("name")
+        or ""
+    )
+    # string enxuta
+    parts = []
+    if due: parts.append(str(due))
+    if desc: parts.append(str(desc))
+    if stakeholder: parts.append(f"({stakeholder})")
+    if val: parts.append(f"R$ {val}")
+    if sid: parts.append(f"[{sid}]")
+    return " • ".join([p for p in parts if p])
+
+# ---------- Attach ----------
+def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool, str]:
+    """
+    Anexa arquivos no agendamento (pagamento=debit ou recebimento=credit).
+    Doc: /schedules/debit/{scheduleId}/files/attach e /schedules/credit/{scheduleId}/files/attach
+    """
+    assert kind in ("debit", "credit")
+    url = f"{BASE}/schedules/{kind}/{schedule_id}/files/attach"
+    headers = nibo_headers(json_body=True)
+
+    # A doc não exibe explicitamente o corpo, então tentamos variantes comuns.
+    variants = [
         {"fileIds": file_ids},
+        {"filesIds": file_ids},  # algumas páginas usam essa grafia
         {"files": [{"fileId": fid} for fid in file_ids]},
         {"ids": file_ids},
     ]
 
-    for payload in payload_variants:
+    last = None
+    for payload in variants:
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+        last = (r.status_code, r.text, payload)
         if r.status_code in (200, 201, 202, 204):
             return True, f"Anexado com sucesso (status {r.status_code}) com payload {payload}"
-        # Se for 400 com mensagem clara, já devolve
-        if r.status_code == 400 and "file" in (r.text or "").lower():
-            return False, f"Erro 400 - verifique o payload ({payload}): {r.text}"
+    return False, f"Falha ao anexar: status {last[0]} • resposta: {last[1]} • último payload testado: {last[2]}"
 
-    return False, f"Falha ao anexar. Última resposta: {r.status_code} - {r.text}"
-
-# =============== Streamlit UI ===============
-st.set_page_config(page_title="Nibo - Upload & Anexar", page_icon="📎")
-st.title("📎 Nibo — Upload de arquivos e anexar a agendamentos (pagamento)")
+# ---------- UI ----------
+st.set_page_config(page_title="Nibo: Upload & Anexar com seleção de agendamento", page_icon="📎")
+st.title("📎 Nibo — Upload, listar abertos e anexar")
 
 with st.sidebar:
     st.header("Configuração")
-    st.write("Defina as variáveis de ambiente antes de rodar:\n- `NIBO_API_KEY`\n- opcional: `NIBO_USER_ID`")
-    st.caption("A API do Nibo usa `X-API-Key` (e opcional `X-User-Id`).")
+    st.write("Defina no seu ambiente:")
+    st.code("export NIBO_API_TOKEN='SEU_TOKEN_AQUI'", language="bash")
+    st.caption("Conforme a doc, use o header ApiToken (ou param apitoken na URL).")
 
+# Sessão para manter uploads feitos agora
+if "uploaded_file_ids" not in st.session_state:
+    st.session_state.uploaded_file_ids = []
+
+# 1) Upload
 st.subheader("1) Upload de arquivos")
-uploads = st.file_uploader("Selecione um ou mais arquivos", type=None, accept_multiple_files=True)
-
-uploaded = []
-if st.button("Fazer upload para o Nibo", disabled=not uploads):
-    for up in uploads:
-        try:
-            resp = upload_file_to_nibo(up.name, up.getvalue())
-            file_id = extract_file_id(resp)
-            uploaded.append({"name": up.name, "fileId": file_id, "raw": resp})
-        except Exception as e:
-            st.error(f"Erro no upload de {up.name}: {e}")
-    if uploaded:
-        st.success("Upload concluído!")
-        st.json(uploaded)
+uploads = st.file_uploader("Selecione 1+ arquivos", type=None, accept_multiple_files=True)
+if st.button("Fazer upload"):
+    if not uploads:
+        st.warning("Selecione pelo menos um arquivo.")
+    else:
+        saved = []
+        for up in uploads:
+            try:
+                resp = upload_file_to_nibo(up.name, up.getvalue())
+                fid = extract_file_id(resp)
+                saved.append({"name": up.name, "fileId": fid, "raw": resp})
+                if fid:
+                    st.session_state.uploaded_file_ids.append(fid)
+            except Exception as e:
+                st.error(f"Erro no upload de {up.name}: {e}")
+        if saved:
+            st.success("Upload concluído!")
+            st.json(saved)
 
 st.divider()
-st.subheader("2) Anexar os arquivos a um agendamento de pagamento")
 
-schedule_id = st.text_input("Informe o scheduleId do **pagamento** (debit)", placeholder="ex.: 8ca3961d-1800-480e-841d-27ebb6e0cbca")
-# fonte de fileIds: prioriza os enviados na sessão atual
-session_file_ids = [u["fileId"] for u in uploaded if u.get("fileId")]
-file_ids_input = st.text_area(
-    "IDs de arquivos (fileIds) — um por linha",
-    value="\n".join(fid for fid in session_file_ids if fid),
-    placeholder="cole aqui os fileIds caso já os tenha",
+# 2) Buscar agendamentos em aberto
+st.subheader("2) Buscar agendamentos em aberto")
+kind = st.radio("Tipo de agendamento", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
+kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+
+col_a, col_b = st.columns(2)
+with col_a:
+    top = st.number_input("Quantidade (top)", min_value=1, max_value=500, value=50, step=1)
+with col_b:
+    order = st.text_input("Ordenação ($orderby)", value="dueDate desc", help="Ex.: dueDate desc, createDate desc, value asc")
+
+odata_filter = st.text_input(
+    "Filtro OData opcional ($filter)",
+    value="",
+    placeholder="ex.: year(dueDate) eq 2025 AND month(dueDate) eq 10 AND value ge 100"
 )
 
-if st.button("Anexar ao agendamento", disabled=not schedule_id or not file_ids_input.strip()):
-    file_ids = [line.strip() for line in file_ids_input.splitlines() if line.strip()]
-    ok, msg = attach_files_to_schedule(schedule_id, file_ids)
+results = []
+if st.button("Buscar agendamentos abertos"):
+    try:
+        results = list_open_schedules(kind_key, top=top, orderby=order, extra_filter=odata_filter)
+        if not results:
+            st.info("Nenhum agendamento encontrado com esses critérios.")
+        else:
+            st.success(f"Encontrados {len(results)} agendamentos.")
+            st.json({"preview": results[:3]})  # mostra amostra para inspecionar campos
+    except Exception as e:
+        st.error(str(e))
+
+# Construir lista de escolhas
+options = []
+id_map = {}
+for it in results:
+    lbl = schedule_label(it)
+    sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId")
+    if sid:
+        options.append(lbl or sid)
+        id_map[lbl or sid] = sid
+
+selected_label = st.selectbox("Escolha um agendamento", options=options) if options else None
+selected_schedule_id = id_map.get(selected_label or "", "")
+
+st.divider()
+
+# 3) Anexar
+st.subheader("3) Anexar arquivos ao agendamento selecionado")
+st.caption("Use os FileIds recém enviados ou cole manualmente um por linha.")
+
+preset = "\n".join(st.session_state.uploaded_file_ids) if st.session_state.uploaded_file_ids else ""
+file_ids_input = st.text_area("FileIds (um por linha)", value=preset)
+
+can_attach = bool(selected_schedule_id and file_ids_input.strip())
+if st.button("Anexar agora", disabled=not can_attach):
+    file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
+    ok, msg = attach_files(kind_key, selected_schedule_id, file_ids)
     (st.success if ok else st.error)(msg)
+
+st.caption("Dica: se quiser listar **todos** os agendamentos (não só abertos), você pode usar os endpoints /schedules/debit e /schedules/credit com OData.")
