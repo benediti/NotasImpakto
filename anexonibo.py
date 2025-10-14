@@ -200,79 +200,86 @@ if st.button("Fazer upload"):
 st.divider()
 
 # ================== 2) Filtros & Busca ==================
-st.subheader("2) Buscar agendamentos")
-col_kind, col_scope = st.columns(2)
-with col_kind:
-    kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
-    kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
-with col_scope:
-    opened_only = st.toggle("Listar apenas abertos", value=True, help="Desative para listar TODOS")
+if "show_cards_only" not in st.session_state:
+    st.session_state.show_cards_only = False
 
-col_top, col_order = st.columns(2)
-with col_top:
-    top = st.number_input("Quantidade (top)", min_value=1, max_value=500, value=100, step=1)
-with col_order:
-    order = st.text_input("Ordenação ($orderby)", value="dueDate desc")
+if not st.session_state.show_cards_only:
+    st.subheader("2) Buscar agendamentos")
+    col_kind, col_scope = st.columns(2)
+    with col_kind:
+        kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
+        kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+    with col_scope:
+        opened_only = st.toggle("Listar apenas abertos", value=True, help="Desative para listar TODOS")
 
-# --- Filtros prontos ---
-st.markdown("**Filtros rápidos** (opcional)")
-col_d1, col_d2, col_min, col_max = st.columns(4)
-with col_d1:
-    d_start = st.date_input("Data inicial (dueDate ≥)", value=None, format="YYYY-MM-DD")
-with col_d2:
-    d_end = st.date_input("Data final (dueDate ≤)", value=None, format="YYYY-MM-DD")
-with col_min:
-    min_val_str = st.text_input("Valor mínimo", value="")
-with col_max:
-    max_val_str = st.text_input("Valor máximo", value="")
+    col_top, col_order = st.columns(2)
+    with col_top:
+        top = st.number_input("Quantidade (top)", min_value=1, max_value=500, value=100, step=1)
+    with col_order:
+        order = st.text_input("Ordenação ($orderby)", value="dueDate desc")
 
-desc_contains = st.text_input("Descrição contém", value="")
-# stakeholder autocomplete será populado dos resultados. Primeiro mostramos um input livre:
-stakeholder_free = st.text_input("Fornecedor/Cliente contém", value="")
+    # --- Filtros prontos ---
+    st.markdown("**Filtros rápidos** (opcional)")
+    col_d1, col_d2, col_min, col_max = st.columns(4)
+    with col_d1:
+        d_start = st.date_input("Data inicial (dueDate ≥)", value=None, format="YYYY-MM-DD")
+    with col_d2:
+        d_end = st.date_input("Data final (dueDate ≤)", value=None, format="YYYY-MM-DD")
+    with col_min:
+        min_val_str = st.text_input("Valor mínimo", value="")
+    with col_max:
+        max_val_str = st.text_input("Valor máximo", value="")
 
-odatabuilder_extra = st.text_input("Filtro OData adicional (avançado, opcional)", placeholder="Ex.: year(dueDate) eq 2025 and value ge 100")
+    desc_contains = st.text_input("Descrição contém", value="")
+    # stakeholder autocomplete será populado dos resultados. Primeiro mostramos um input livre:
+    stakeholder_free = st.text_input("Fornecedor/Cliente contém", value="")
 
-def to_float_or_none(s: str):
-    s = (s or "").strip().replace(",", ".")
-    if not s:
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
+    odatabuilder_extra = st.text_input("Filtro OData adicional (avançado, opcional)", placeholder="Ex.: year(dueDate) eq 2025 and value ge 100")
 
-min_val = to_float_or_none(min_val_str)
-max_val = to_float_or_none(max_val_str)
+    def to_float_or_none(s: str):
+        s = (s or "").strip().replace(",", ".")
+        if not s:
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
 
-odata_from_ui = build_odata_filter(
-    d_start if isinstance(d_start, date) else None,
-    d_end if isinstance(d_end, date) else None,
-    stakeholder_free if stakeholder_free.strip() else None,
-    desc_contains if desc_contains.strip() else None,
-    min_val, max_val
-)
+    min_val = to_float_or_none(min_val_str)
+    max_val = to_float_or_none(max_val_str)
 
-final_filter = ""
-if odata_from_ui and odatabuilder_extra:
-    final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
-elif odata_from_ui:
-    final_filter = odata_from_ui
-elif odatabuilder_extra:
-    final_filter = odatabuilder_extra
+    odata_from_ui = build_odata_filter(
+        d_start if isinstance(d_start, date) else None,
+        d_end if isinstance(d_end, date) else None,
+        stakeholder_free if stakeholder_free.strip() else None,
+        desc_contains if desc_contains.strip() else None,
+        min_val, max_val
+    )
 
-results = []
-if st.button("Buscar"):
-    try:
-        results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
-        st.session_state.last_results = results or []
-        if not results:
-            st.info("Nenhum agendamento encontrado com esses critérios.")
-        else:
-            st.success(f"Encontrados {len(results)} agendamentos.")
-            # Amostra dos 3 primeiros para inspeção de campos
-            st.json({"preview": results[:3]})
-    except Exception as e:
-        st.error(str(e))
+    final_filter = ""
+    if odata_from_ui and odatabuilder_extra:
+        final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
+    elif odata_from_ui:
+        final_filter = odata_from_ui
+    elif odatabuilder_extra:
+        final_filter = odatabuilder_extra
+
+    results = []
+    if st.button("Buscar"):
+        try:
+            results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
+            st.session_state.last_results = results or []
+            st.session_state.show_cards_only = True  # Mostra só os cards após buscar
+            if not results:
+                st.info("Nenhum agendamento encontrado com esses critérios.")
+            else:
+                st.success(f"Encontrados {len(results)} agendamentos.")
+                st.json({"preview": results[:3]})
+        except Exception as e:
+            st.error(str(e))
+else:
+    if st.button("Voltar para filtros"):
+        st.session_state.show_cards_only = False
 
 # ================== 2.1) Autocomplete de Fornecedor/Cliente ==================
 if st.session_state.last_results:
@@ -353,7 +360,12 @@ file_ids_input = st.text_area("FileIds", value=preset, placeholder="FILE_ID_1\nF
 can_attach = bool(selected_schedule_id and file_ids_input.strip())
 if st.button("Anexar agora", disabled=not can_attach):
     file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
-    ok, msg = attach_files("debit" if kind_key == "debit" else "credit", selected_schedule_id, file_ids)
-    (st.success if ok else st.error)(msg)
+    # Filtra apenas IDs válidos (não vazios)
+    file_ids = [fid for fid in file_ids if fid]
+    if not file_ids:
+        st.error("Nenhum FileId válido informado.")
+    else:
+        ok, msg = attach_files("debit" if kind_key == "debit" else "credit", selected_schedule_id, file_ids)
+        (st.success if ok else st.error)(msg)
 
 st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
