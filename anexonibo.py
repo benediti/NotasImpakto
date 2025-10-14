@@ -149,9 +149,7 @@ def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool
 
     variants = [
         {"fileIds": file_ids},
-        {"filesIds": file_ids},
         {"files": [{"fileId": fid} for fid in file_ids]},
-        {"ids": file_ids},
     ]
     last = None
     for payload in variants:
@@ -159,7 +157,6 @@ def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool
         last = (r.status_code, r.text, payload)
         if r.status_code in (200, 201, 202, 204):
             return True, f"Anexado com sucesso (status {r.status_code}) com payload {payload}"
-        # em alguns erros a API retorna 400/422 com mensagem clara:
         if r.status_code in (400, 422) and "file" in (r.text or "").lower():
             return False, f"Erro ao anexar — verifique o formato do payload {payload}: {r.text}"
     return False, f"Falha ao anexar: status {last[0]} • resposta: {last[1]} • último payload: {last[2]}"
@@ -310,7 +307,7 @@ if st.session_state.last_results:
             except Exception as e:
                 st.error(str(e))
 
-# ================== 2.2) Escolha do agendamento ==================
+# ================== 2.2) Escolha do agendamento como cards ==================
 options = []
 id_map = {}
 for it in st.session_state.last_results:
@@ -320,8 +317,29 @@ for it in st.session_state.last_results:
         options.append(lbl or sid)
         id_map[lbl or sid] = sid
 
-selected_label = st.selectbox("Escolha um agendamento para anexar", options=options) if options else None
-selected_schedule_id = id_map.get(selected_label or "", "")
+st.markdown("### Agendamentos encontrados")
+num_cols = 3  # Quantidade de cards por linha
+rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
+
+if "selected_label" not in st.session_state:
+    st.session_state.selected_label = None
+if "selected_schedule_id" not in st.session_state:
+    st.session_state.selected_schedule_id = None
+
+for row in rows:
+    cols = st.columns(len(row))
+    for idx, lbl in enumerate(row):
+        sid = id_map[lbl]
+        with cols[idx]:
+            st.markdown(f"**{lbl}**")
+            if st.button("Selecionar", key=f"card_{sid}"):
+                st.session_state.selected_label = lbl
+                st.session_state.selected_schedule_id = sid
+            # Destaca o card selecionado
+            if st.session_state.selected_label == lbl:
+                st.success("Selecionado")
+
+selected_schedule_id = st.session_state.selected_schedule_id
 
 st.divider()
 
