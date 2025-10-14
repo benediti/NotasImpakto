@@ -2,25 +2,30 @@ import os
 import json
 import requests
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
+from dateutil.parser import parse as dtparse
+from dotenv import load_dotenv
 
+# ================== Config Básica ==================
+load_dotenv()  # carrega .env se existir
 BASE = "https://api.nibo.com.br/empresas/v1"
 
-# ---------- Helpers de autenticação ----------
+st.set_page_config(page_title="Nibo: Upload + Filtros + Anexo", page_icon="📎")
+st.title("📎 Nibo — Upload, filtros e anexo em agendamentos")
+
+# ================== Helpers ==================
 def nibo_headers(json_body: bool = False) -> dict:
     """
-    Empresa API do Nibo aceita o token como header 'ApiToken' (ou via query 'apitoken').
-    Preferimos o header, conforme doc oficial.
+    Preferimos o header 'ApiToken' (ou param apitoken na URL).
     """
     api_token = os.environ.get("NIBO_API_TOKEN") or os.environ.get("NIBO_API_KEY") or ""
     if not api_token:
-        st.warning("Defina a variável de ambiente NIBO_API_TOKEN (ou NIBO_API_KEY).")
+        st.warning("Defina NIBO_API_TOKEN (ou NIBO_API_KEY) no ambiente ou em um arquivo .env")
     h = {"ApiToken": api_token, "Accept": "application/json"}
     if json_body:
         h["Content-Type"] = "application/json"
     return h
 
-# ---------- Upload ----------
 def upload_file_to_nibo(file_name: str, file_bytes: bytes) -> dict:
     url = f"{BASE}/files"
     files = {"file": (file_name, file_bytes)}
@@ -36,7 +41,6 @@ def extract_file_id(upload_resp: dict) -> str:
     for k in ("FileId", "fileId", "id", "Id", "ID"):
         if isinstance(upload_resp, dict) and upload_resp.get(k):
             return str(upload_resp[k])
-    # nested
     for v in (upload_resp or {}).values():
         if isinstance(v, dict):
             fid = extract_file_id(v)
@@ -44,46 +48,19 @@ def extract_file_id(upload_resp: dict) -> str:
                 return fid
     return ""
 
-# ---------- Listagens (abertos) ----------
-def list_open_schedules(kind: str, top: int = 50, orderby: str = "dueDate desc", extra_filter: str = "") -> list[dict]:
-    """
-    kind: 'debit' (pagamentos) ou 'credit' (recebimentos)
-    Usa endpoints /schedules/{kind}/opened com OData ($orderby, $top e $filter).
-    """
-    assert kind in ("debit", "credit")
-    url = f"{BASE}/schedules/{kind}/opened"
-    params = {"$orderby": orderby, "$top": str(top)}
-    if extra_filter.strip():
-        params["$filter"] = extra_filter
-    r = requests.get(url, headers=nibo_headers(), params=params, timeout=60)
-    if r.status_code >= 400:
-        raise RuntimeError(f"Erro ao listar {kind} abertos ({r.status_code}): {r.text}")
-    data = r.json()
-    # respostas do Nibo geralmente trazem 'items' ou lista direta; lidamos com ambos
-    if isinstance(data, dict) and "items" in data:
-        return data["items"] or []
-    if isinstance(data, list):
-        return data
-    # fallback
-    return data.get("value") or data.get("results") or []
-
 def schedule_label(it: dict) -> str:
-    """
-    Cria um rótulo amigável para exibir no select (tenta pegar campos comuns).
-    """
     sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId") or ""
     desc = it.get("description") or it.get("title") or ""
     due = it.get("dueDate") or it.get("due") or it.get("due_date") or ""
     val = it.get("value") or it.get("amount") or ""
-    # stakeholder aninhado costuma vir como stakeholder/name, tentamos algumas chaves
     stakeholder = (
         (it.get("stakeholder") or {}).get("name")
         or (it.get("client") or {}).get("name")
         or (it.get("supplier") or {}).get("name")
         or ""
     )
-    # string enxuta
     parts = []
+    if isinstance(due, (int, float)): due = str(due)
     if due: parts.append(str(due))
     if desc: parts.append(str(desc))
     if stakeholder: parts.append(f"({stakeholder})")
@@ -91,47 +68,107 @@ def schedule_label(it: dict) -> str:
     if sid: parts.append(f"[{sid}]")
     return " • ".join([p for p in parts if p])
 
-# ---------- Attach ----------
+def _escape_odata_string(s: str) -> str:
+    return s.replace("'", "''")
+
+def build_odata_filter(d_start: date | None, d_end: date | None,
+                       stakeholder_name: str | None,
+                       desc_contains: str | None,
+                       min_value: float | None,
+                       max_value: float | None) -> str:
+    """
+    Monta um $filter OData básico usando campos comuns:
+      - dueDate ge/le
+      - contains(description,'...')
+      - contains(stakeholder/name,'...')
+      - value ge/le
+    Observação: caso algum campo não exista exatamente no seu tenant, o servidor ignora ou retorna 400.
+    """
+    clauses = []
+    if d_start:
+        # padroniza para ISO yyyy-mm-dd
+        clauses.append(f"dueDate ge {d_start.isoformat()}")
+    if d_end:
+        clauses.append(f"dueDate le {d_end.isoformat()}")
+
+    if desc_contains:
+        s = _escape_odata_string(desc_contains.strip())
+        # usamos tolower por segurança, mas nem todo servidor OData aceita: deixamos sem função
+        clauses.append(f"contains(description,'{s}')")
+
+    if stakeholder_name:
+        s = _escape_odata_string(stakeholder_name.strip())
+        # tentamos vários campos comuns (stakeholder/name, client/name, supplier/name)
+        name_clauses = [
+            f"contains(stakeholder/name,'{s}')",
+            f"contains(client/name,'{s}')",
+            f"contains(supplier/name,'{s}')",
+        ]
+        clauses.append("(" + " or ".join(name_clauses) + ")")
+
+    if min_value is not None:
+        clauses.append(f"value ge {min_value}")
+    if max_value is not None:
+        clauses.append(f"value le {max_value}")
+
+    return " and ".join(clauses)
+
+def list_schedules(kind: str, opened_only: bool, top: int = 100,
+                   orderby: str = "dueDate desc",
+                   odata_filter: str | None = None) -> list[dict]:
+    assert kind in ("debit", "credit")
+    base_path = f"/schedules/{kind}/opened" if opened_only else f"/schedules/{kind}"
+    url = f"{BASE}{base_path}"
+    params = {"$orderby": orderby, "$top": str(top)}
+    if odata_filter and odata_filter.strip():
+        params["$filter"] = odata_filter
+    r = requests.get(url, headers=nibo_headers(), params=params, timeout=60)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Erro ao listar {kind} ({'abertos' if opened_only else 'todos'}) — {r.status_code}: {r.text}")
+    data = r.json()
+    if isinstance(data, dict) and "items" in data:
+        return data["items"] or []
+    if isinstance(data, list):
+        return data
+    return data.get("value") or data.get("results") or []
+
 def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool, str]:
-    """
-    Anexa arquivos no agendamento (pagamento=debit ou recebimento=credit).
-    Doc: /schedules/debit/{scheduleId}/files/attach e /schedules/credit/{scheduleId}/files/attach
-    """
     assert kind in ("debit", "credit")
     url = f"{BASE}/schedules/{kind}/{schedule_id}/files/attach"
     headers = nibo_headers(json_body=True)
 
-    # A doc não exibe explicitamente o corpo, então tentamos variantes comuns.
     variants = [
         {"fileIds": file_ids},
-        {"filesIds": file_ids},  # algumas páginas usam essa grafia
+        {"filesIds": file_ids},
         {"files": [{"fileId": fid} for fid in file_ids]},
         {"ids": file_ids},
     ]
-
     last = None
     for payload in variants:
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
         last = (r.status_code, r.text, payload)
         if r.status_code in (200, 201, 202, 204):
             return True, f"Anexado com sucesso (status {r.status_code}) com payload {payload}"
-    return False, f"Falha ao anexar: status {last[0]} • resposta: {last[1]} • último payload testado: {last[2]}"
+        # em alguns erros a API retorna 400/422 com mensagem clara:
+        if r.status_code in (400, 422) and "file" in (r.text or "").lower():
+            return False, f"Erro ao anexar — verifique o formato do payload {payload}: {r.text}"
+    return False, f"Falha ao anexar: status {last[0]} • resposta: {last[1]} • último payload: {last[2]}"
 
-# ---------- UI ----------
-st.set_page_config(page_title="Nibo: Upload & Anexar com seleção de agendamento", page_icon="📎")
-st.title("📎 Nibo — Upload, listar abertos e anexar")
-
+# ================== Sidebar ==================
 with st.sidebar:
     st.header("Configuração")
-    st.write("Defina no seu ambiente:")
-    st.code("export NIBO_API_TOKEN='SEU_TOKEN_AQUI'", language="bash")
-    st.caption("Conforme a doc, use o header ApiToken (ou param apitoken na URL).")
+    st.write("Defina suas credenciais (em .env ou ambiente):")
+    st.code("NIBO_API_TOKEN=SEU_TOKEN_AQUI", language="bash")
+    st.caption("Usa header ApiToken (ou parâmetro apitoken).")
 
-# Sessão para manter uploads feitos agora
+# ================== Estado ==================
 if "uploaded_file_ids" not in st.session_state:
     st.session_state.uploaded_file_ids = []
 
-# 1) Upload
+if "last_results" not in st.session_state:
+    st.session_state.last_results = []
+
+# ================== 1) Upload ==================
 st.subheader("1) Upload de arquivos")
 uploads = st.file_uploader("Selecione 1+ arquivos", type=None, accept_multiple_files=True)
 if st.button("Fazer upload"):
@@ -154,61 +191,140 @@ if st.button("Fazer upload"):
 
 st.divider()
 
-# 2) Buscar agendamentos em aberto
-st.subheader("2) Buscar agendamentos em aberto")
-kind = st.radio("Tipo de agendamento", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
-kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+# ================== 2) Filtros & Busca ==================
+st.subheader("2) Buscar agendamentos")
+col_kind, col_scope = st.columns(2)
+with col_kind:
+    kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
+    kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+with col_scope:
+    opened_only = st.toggle("Listar apenas abertos", value=True, help="Desative para listar TODOS")
 
-col_a, col_b = st.columns(2)
-with col_a:
-    top = st.number_input("Quantidade (top)", min_value=1, max_value=500, value=50, step=1)
-with col_b:
-    order = st.text_input("Ordenação ($orderby)", value="dueDate desc", help="Ex.: dueDate desc, createDate desc, value asc")
+col_top, col_order = st.columns(2)
+with col_top:
+    top = st.number_input("Quantidade (top)", min_value=1, max_value=500, value=100, step=1)
+with col_order:
+    order = st.text_input("Ordenação ($orderby)", value="dueDate desc")
 
-odata_filter = st.text_input(
-    "Filtro OData opcional ($filter)",
-    value="",
-    placeholder="ex.: year(dueDate) eq 2025 AND month(dueDate) eq 10 AND value ge 100"
+# --- Filtros prontos ---
+st.markdown("**Filtros rápidos** (opcional)")
+col_d1, col_d2, col_min, col_max = st.columns(4)
+with col_d1:
+    d_start = st.date_input("Data inicial (dueDate ≥)", value=None, format="YYYY-MM-DD")
+with col_d2:
+    d_end = st.date_input("Data final (dueDate ≤)", value=None, format="YYYY-MM-DD")
+with col_min:
+    min_val_str = st.text_input("Valor mínimo", value="")
+with col_max:
+    max_val_str = st.text_input("Valor máximo", value="")
+
+desc_contains = st.text_input("Descrição contém", value="")
+# stakeholder autocomplete será populado dos resultados. Primeiro mostramos um input livre:
+stakeholder_free = st.text_input("Fornecedor/Cliente contém", value="")
+
+odatabuilder_extra = st.text_input("Filtro OData adicional (avançado, opcional)", placeholder="Ex.: year(dueDate) eq 2025 and value ge 100")
+
+def to_float_or_none(s: str):
+    s = (s or "").strip().replace(",", ".")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+min_val = to_float_or_none(min_val_str)
+max_val = to_float_or_none(max_val_str)
+
+odata_from_ui = build_odata_filter(
+    d_start if isinstance(d_start, date) else None,
+    d_end if isinstance(d_end, date) else None,
+    stakeholder_free if stakeholder_free.strip() else None,
+    desc_contains if desc_contains.strip() else None,
+    min_val, max_val
 )
 
+final_filter = ""
+if odata_from_ui and odatabuilder_extra:
+    final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
+elif odata_from_ui:
+    final_filter = odata_from_ui
+elif odatabuilder_extra:
+    final_filter = odatabuilder_extra
+
 results = []
-if st.button("Buscar agendamentos abertos"):
+if st.button("Buscar"):
     try:
-        results = list_open_schedules(kind_key, top=top, orderby=order, extra_filter=odata_filter)
+        results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
+        st.session_state.last_results = results or []
         if not results:
             st.info("Nenhum agendamento encontrado com esses critérios.")
         else:
             st.success(f"Encontrados {len(results)} agendamentos.")
-            st.json({"preview": results[:3]})  # mostra amostra para inspecionar campos
+            # Amostra dos 3 primeiros para inspeção de campos
+            st.json({"preview": results[:3]})
     except Exception as e:
         st.error(str(e))
 
-# Construir lista de escolhas
+# ================== 2.1) Autocomplete de Fornecedor/Cliente ==================
+if st.session_state.last_results:
+    # extrai nomes únicos de stakeholder
+    names = set()
+    for it in st.session_state.last_results:
+        for k in ("stakeholder", "client", "supplier"):
+            obj = it.get(k) or {}
+            nm = obj.get("name")
+            if nm:
+                names.add(nm)
+    names_list = sorted(names)
+    if names_list:
+        st.markdown("**Autocomplete de Fornecedor/Cliente** (aplica um contains no nome)")
+        selected_name = st.selectbox("Escolha um nome para filtrar novamente", options=["(não filtrar)"] + names_list)
+        if selected_name != "(não filtrar)":
+            extra_name_filter = build_odata_filter(
+                d_start if isinstance(d_start, date) else None,
+                d_end if isinstance(d_end, date) else None,
+                selected_name,  # usa o nome selecionado
+                desc_contains if desc_contains.strip() else None,
+                min_val, max_val
+            )
+            # combina com filtro avançado, se houver
+            if odatabuilder_extra:
+                extra_name_filter = f"({extra_name_filter}) and ({odatabuilder_extra})"
+            try:
+                results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=extra_name_filter)
+                st.session_state.last_results = results or []
+                st.success(f"Refinado por fornecedor/cliente: {selected_name} — {len(results)} resultados.")
+                st.json({"preview": results[:3]})
+            except Exception as e:
+                st.error(str(e))
+
+# ================== 2.2) Escolha do agendamento ==================
 options = []
 id_map = {}
-for it in results:
+for it in st.session_state.last_results:
     lbl = schedule_label(it)
     sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId")
     if sid:
         options.append(lbl or sid)
         id_map[lbl or sid] = sid
 
-selected_label = st.selectbox("Escolha um agendamento", options=options) if options else None
+selected_label = st.selectbox("Escolha um agendamento para anexar", options=options) if options else None
 selected_schedule_id = id_map.get(selected_label or "", "")
 
 st.divider()
 
-# 3) Anexar
+# ================== 3) Anexar ==================
 st.subheader("3) Anexar arquivos ao agendamento selecionado")
-st.caption("Use os FileIds recém enviados ou cole manualmente um por linha.")
+st.caption("Use os FileIds recém-enviados ou cole manualmente (um por linha).")
 
 preset = "\n".join(st.session_state.uploaded_file_ids) if st.session_state.uploaded_file_ids else ""
-file_ids_input = st.text_area("FileIds (um por linha)", value=preset)
+file_ids_input = st.text_area("FileIds", value=preset, placeholder="FILE_ID_1\nFILE_ID_2")
 
 can_attach = bool(selected_schedule_id and file_ids_input.strip())
 if st.button("Anexar agora", disabled=not can_attach):
     file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
-    ok, msg = attach_files(kind_key, selected_schedule_id, file_ids)
+    ok, msg = attach_files("debit" if kind_key == "debit" else "credit", selected_schedule_id, file_ids)
     (st.success if ok else st.error)(msg)
 
-st.caption("Dica: se quiser listar **todos** os agendamentos (não só abertos), você pode usar os endpoints /schedules/debit e /schedules/credit com OData.")
+st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
