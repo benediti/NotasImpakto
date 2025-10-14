@@ -209,6 +209,7 @@ if not st.session_state.show_cards_only:
     with col_kind:
         kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
         kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+        st.session_state.kind_key = kind_key
     with col_scope:
         opened_only = st.toggle("Listar apenas abertos", value=True, help="Desative para listar TODOS")
 
@@ -360,12 +361,18 @@ file_ids_input = st.text_area("FileIds", value=preset, placeholder="FILE_ID_1\nF
 can_attach = bool(selected_schedule_id and file_ids_input.strip())
 if st.button("Anexar agora", disabled=not can_attach):
     file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
-    # Filtra apenas IDs válidos (não vazios)
     file_ids = [fid for fid in file_ids if fid]
     if not file_ids:
         st.error("Nenhum FileId válido informado.")
     else:
-        ok, msg = attach_files("debit" if kind_key == "debit" else "credit", selected_schedule_id, file_ids)
+        ok, msg = attach_files(
+            st.session_state.kind_key if "kind_key" in st.session_state else "debit",
+            selected_schedule_id,
+            file_ids
+        )
         (st.success if ok else st.error)(msg)
 
+
+
+st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
 st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
