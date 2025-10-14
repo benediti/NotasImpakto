@@ -147,19 +147,12 @@ def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool
     url = f"{BASE}/schedules/{kind}/{schedule_id}/files/attach"
     headers = nibo_headers(json_body=True)
 
-    variants = [
-        {"fileIds": file_ids},
-        {"files": [{"fileId": fid} for fid in file_ids]},
-    ]
-    last = None
-    for payload in variants:
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-        last = (r.status_code, r.text, payload)
-        if r.status_code in (200, 201, 202, 204):
-            return True, f"Anexado com sucesso (status {r.status_code}) com payload {payload}"
-        if r.status_code in (400, 422) and "file" in (r.text or "").lower():
-            return False, f"Erro ao anexar — verifique o formato do payload {payload}: {r.text}"
-    return False, f"Falha ao anexar: status {last[0]} • resposta: {last[1]} • último payload: {last[2]}"
+    # O corpo deve ser apenas uma lista de strings (IDs)
+    payload = file_ids
+    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+    if r.status_code in (200, 201, 202, 204):
+        return True, f"Anexado com sucesso (status {r.status_code})"
+    return False, f"Falha ao anexar: status {r.status_code} • resposta: {r.text} • payload: {payload}"
 
 # ================== Sidebar ==================
 with st.sidebar:
@@ -275,7 +268,7 @@ if not st.session_state.show_cards_only:
                 st.info("Nenhum agendamento encontrado com esses critérios.")
             else:
                 st.success(f"Encontrados {len(results)} agendamentos.")
-                st.json({"preview": results[:3]})
+                # st.json({"preview": results[:3]})  # Removido para não mostrar a lista
         except Exception as e:
             st.error(str(e))
 else:
