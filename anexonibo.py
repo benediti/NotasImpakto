@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import streamlit as st
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from dateutil.parser import parse as dtparse
 from dotenv import load_dotenv
 import re
@@ -162,55 +162,52 @@ def has_number(s: str) -> bool:
 def is_number(s: str) -> bool:
     return bool(re.fullmatch(r'\d+', s.strip()))
 
-# ================== Funções para nova sessão ==================
-def nova_sessao():
-    """Limpa o estado para iniciar uma nova conciliação"""
-    st.session_state.selected_label = None
-    st.session_state.selected_schedule_id = None
-    st.session_state.pending_uploads = []
-    st.session_state.current_session_files = []
-    st.session_state.show_history = False
+def get_stakeholder_name(item):
+    """Extrai o nome do stakeholder (fornecedor/cliente) de um item"""
+    return ((item.get("stakeholder") or {}).get("name")
+        or (item.get("client") or {}).get("name")
+        or (item.get("supplier") or {}).get("name")
+        or "")
 
-def limpar_selecao():
-    """Limpa apenas a seleção atual, mantendo o histórico"""
-    st.session_state.selected_label = None
-    st.session_state.selected_schedule_id = None
+def get_due_date(item):
+    """Extrai a data de vencimento do item e converte para objeto date"""
+    due = item.get("dueDate") or item.get("due") or item.get("due_date") or ""
+    if isinstance(due, str) and due:
+        try:
+            return dtparse(due).date()
+        except:
+            return None
+    return None
+
+def group_by_stakeholder(results):
+    """Agrupa resultados por stakeholder (fornecedor/cliente)"""
+    groups = {}
+    for item in results:
+        stakeholder = get_stakeholder_name(item)
+        if not stakeholder:
+            stakeholder = "Sem fornecedor/cliente"
+        
+        if stakeholder not in groups:
+            groups[stakeholder] = []
+        groups[stakeholder].append(item)
     
-# ================== Sidebar ==================
-with st.sidebar:
-    st.header("Configuração")
-    st.write("Defina suas credenciais (em .env ou ambiente):")
-    st.code("NIBO_API_TOKEN=SEU_TOKEN_AQUI", language="bash")
-    st.caption("Usa header ApiToken (ou parâmetro apitoken).")
-    
-    # Botões para controle de sessão
-    st.markdown("---")
-    st.subheader("Controle de Conciliação")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Nova Conciliação", use_container_width=True):
-            nova_sessao()
-            st.rerun()
-    with col2:
-        if st.button("Limpar Seleção", use_container_width=True):
-            limpar_selecao()
-            st.rerun()
-    
-    # Histórico de conciliações
-    if st.toggle("Mostrar histórico", value=st.session_state.get("show_history", False)):
-        st.session_state.show_history = True
-        if "history" in st.session_state and st.session_state.history:
-            st.markdown("### Conciliações anteriores")
-            for idx, item in enumerate(st.session_state.history):
-                with st.expander(f"{item['date']} - {item['schedule_label'][:20]}..."):
-                    st.write(f"**Agendamento:** {item['schedule_label']}")
-                    st.write(f"**Arquivos anexados:** {len(item['files'])}")
-                    for file in item['files']:
-                        st.write(f"- {file['name']}")
+    return groups
+
+def group_by_due_date(results):
+    """Agrupa resultados por data de vencimento"""
+    groups = {}
+    for item in results:
+        due_date = get_due_date(item)
+        if not due_date:
+            due_date_str = "Sem data"
         else:
-            st.info("Nenhum histórico de conciliação disponível")
-    else:
-        st.session_state.show_history = False
+            due_date_str = due_date.strftime("%d/%m/%Y")
+        
+        if due_date_str not in groups:
+            groups[due_date_str] = []
+        groups[due_date_str].append(item)
+    
+    return groups
 
 # ================== Estado ==================
 if "uploaded_file_ids" not in st.session_state:
@@ -222,300 +219,332 @@ if "last_results" not in st.session_state:
 if "pending_uploads" not in st.session_state:
     st.session_state.pending_uploads = []
 
-if "selected_label" not in st.session_state:
-    st.session_state.selected_label = None
-
 if "selected_schedule_id" not in st.session_state:
     st.session_state.selected_schedule_id = None
 
-if "current_session_files" not in st.session_state:
-    st.session_state.current_session_files = []
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []  # Lista de {id, name, size}
 
-if "history" not in st.session_state:
-    st.session_state.history = []
+if "completed_attachments" not in st.session_state:
+    st.session_state.completed_attachments = []  # Lista de {schedule_id, file_id}
 
-if "show_history" not in st.session_state:
-    st.session_state.show_history = False
-
-# ================== Layout principal com tabs ==================
-tab1, tab2 = st.tabs(["Busca e Conciliação", "Ajuda"])
-
-with tab1:
-    # Container para destacar sessão atual
-    with st.container(border=True):
-        if st.session_state.selected_schedule_id:
-            st.success(f"Conciliação atual: {st.session_state.selected_label}")
-            st.caption("Para iniciar uma nova conciliação, clique em 'Nova Conciliação' no menu lateral")
-        else:
-            st.info("Nenhum agendamento selecionado para conciliação. Busque e selecione um agendamento abaixo.")
+# ================== Sidebar ==================
+with st.sidebar:
+    st.header("Configuração")
+    st.write("Defina suas credenciais (em .env ou ambiente):")
+    st.code("NIBO_API_TOKEN=SEU_TOKEN_AQUI", language="bash")
+    st.caption("Usa header ApiToken (ou parâmetro apitoken).")
     
-    # Layout principal dividido em duas colunas
-    col_busca, col_arquivos = st.columns([3, 2])
+    # Limpar dados
+    if st.button("🗑️ Limpar dados", use_container_width=True):
+        st.session_state.uploaded_files = []
+        st.session_state.pending_uploads = []
+        st.session_state.completed_attachments = []
+        st.rerun()
+
+# ================== Layout principal com duas colunas ==================
+col_search, col_upload = st.columns([3, 2])
+
+# Coluna de busca e visualização de agendamentos
+with col_search:
+    st.subheader("Buscar agendamentos")
     
-    # Coluna de busca e seleção de agendamentos
-    with col_busca:
-        st.subheader("1. Buscar e selecionar agendamento")
-        
-        col_kind, col_scope = st.columns(2)
-        with col_kind:
-            kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
-            kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
-            st.session_state.kind_key = kind_key
-        with col_scope:
-            opened_only = st.toggle("Listar apenas abertos", value=True, help="Desative para listar TODOS")
-
-        # Filtros em linha
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            desc_contains = st.text_input("Buscar por descrição (número, texto, etc)", value="", placeholder="Ex: 3344, NF, pagamento")
-        with col2:
-            top = st.number_input("Quantidade", min_value=1, max_value=500, value=100, step=10)
-        
-        # Filtros avançados (colapsáveis)
-        with st.expander("Filtros avançados"):
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                d_start = st.date_input("Data inicial (dueDate ≥)", value=None, format="YYYY-MM-DD")
-            with col_d2:
-                d_end = st.date_input("Data final (dueDate ≤)", value=None, format="YYYY-MM-DD")
-                
-            col_min, col_max, col_order = st.columns(3)
-            with col_min:
-                min_val_str = st.text_input("Valor mínimo", value="")
-            with col_max:
-                max_val_str = st.text_input("Valor máximo", value="")
-            with col_order:
-                order = st.selectbox("Ordenação", options=["dueDate desc", "dueDate asc", "value desc", "value asc"])
-
-        # Parse min_val and max_val
-        try:
-            min_val = float(min_val_str) if min_val_str.strip() else None
-        except ValueError:
-            min_val = None
-        try:
-            max_val = float(max_val_str) if max_val_str.strip() else None
-        except ValueError:
-            max_val = None
-
-        # Botão de busca
-        if st.button("Buscar", key="btn_search", use_container_width=True):
-            with st.spinner("Buscando agendamentos..."):
+    # Botões de busca rápida
+    st.markdown("### Busca rápida")
+    quick_search_cols = st.columns(3)
+    
+    with quick_search_cols[0]:
+        if st.button("📅 Hoje", use_container_width=True):
+            today = date.today()
+            with st.spinner("Buscando agendamentos de hoje..."):
                 try:
-                    # Constrói o filtro OData
-                    stakeholder_free = ""
-                    odatabuilder_extra = ""
-                    
-                    odata_from_ui = build_odata_filter(
-                        d_start if isinstance(d_start, date) else None,
-                        d_end if isinstance(d_end, date) else None,
-                        stakeholder_free if stakeholder_free.strip() else None,
-                        desc_contains if desc_contains.strip() else None,
-                        min_val, max_val
-                    )
-
-                    final_filter = ""
-                    if odata_from_ui and odatabuilder_extra:
-                        final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
-                    elif odata_from_ui:
-                        final_filter = odata_from_ui
-                    elif odatabuilder_extra:
-                        final_filter = odatabuilder_extra
-
-                    # Busca os agendamentos
-                    results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
-                    
-                    # Filtra resultados com número específico na descrição (se for número)
-                    if desc_contains.strip() and is_number(desc_contains.strip()):
-                        results = [r for r in results if desc_contains.strip() in (r.get("description") or "")]
-                    
-                    st.session_state.last_results = results or []
-                    
-                    if not results:
-                        st.info("Nenhum agendamento encontrado com esses critérios.")
-                    else:
-                        st.success(f"Encontrados {len(results)} agendamentos.")
+                    odata_filter = f"dueDate ge {today.isoformat()} and dueDate le {today.isoformat()}"
+                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
+                    st.session_state.last_results = results
+                    st.session_state.kind_key = "debit"
+                    st.session_state.group_by = "data"
+                    st.success(f"Encontrados {len(results)} agendamentos para hoje")
                 except Exception as e:
-                    st.error(f"Erro na busca: {str(e)}")
-
-        # Resultados da busca (agendamentos)
-        if st.session_state.last_results:
-            st.markdown("### Agendamentos encontrados")
-            
-            # Prepara os dados
-            options = []
-            id_map = {}
-            for it in st.session_state.last_results:
-                lbl = schedule_label(it)
-                sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId")
-                if sid:
-                    options.append(lbl or sid)
-                    id_map[lbl or sid] = sid
-            
-            # Exibe cada agendamento como card
-            for idx, lbl in enumerate(options):
-                sid = id_map[lbl]
-                with st.container(border=True):
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        st.markdown(f"**{lbl}**")
-                    with col2:
-                        # Botão para selecionar o agendamento
-                        if st.button("Selecionar", key=f"card_{sid}"):
-                            # Se estiver começando nova conciliação, limpa arquivos anteriores
-                            if st.session_state.selected_schedule_id != sid:
-                                st.session_state.current_session_files = []
-                            st.session_state.selected_label = lbl
-                            st.session_state.selected_schedule_id = sid
-                            st.rerun()
-                    
-                    # Destaca o agendamento selecionado
-                    if st.session_state.selected_schedule_id == sid:
-                        st.success("✓ Selecionado para conciliação")
+                    st.error(f"Erro: {str(e)}")
     
-    # Coluna de arquivos e anexos
-    with col_arquivos:
-        st.subheader("2. Upload e anexação de arquivos")
-        
-        # Upload de arquivos - sempre visível
-        uploaded_files = st.file_uploader(
-            "Selecione um ou mais arquivos",
-            type=None,
-            accept_multiple_files=True,
-            key="file_uploader_main"
-        )
-        
-        if uploaded_files:
-            # Adiciona apenas arquivos novos à lista de pendentes
-            for up in uploaded_files:
-                if up.name not in [f.name for f in st.session_state.pending_uploads]:
-                    st.session_state.pending_uploads.append(up)
-        
-        # Mostra arquivos pendentes para upload
-        if st.session_state.pending_uploads:
-            st.markdown("### Arquivos pendentes para upload")
+    with quick_search_cols[1]:
+        if st.button("📅 Esta semana", use_container_width=True):
+            today = date.today()
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            with st.spinner("Buscando agendamentos desta semana..."):
+                try:
+                    odata_filter = f"dueDate ge {start_of_week.isoformat()} and dueDate le {end_of_week.isoformat()}"
+                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
+                    st.session_state.last_results = results
+                    st.session_state.kind_key = "debit"
+                    st.session_state.group_by = "data"
+                    st.success(f"Encontrados {len(results)} agendamentos para esta semana")
+                except Exception as e:
+                    st.error(f"Erro: {str(e)}")
+    
+    with quick_search_cols[2]:
+        if st.button("📅 Este mês", use_container_width=True):
+            today = date.today()
+            start_of_month = date(today.year, today.month, 1)
+            if today.month == 12:
+                end_of_month = date(today.year+1, 1, 1) - timedelta(days=1)
+            else:
+                end_of_month = date(today.year, today.month+1, 1) - timedelta(days=1)
             
-            for idx, up in enumerate(st.session_state.pending_uploads[:]):
-                with st.container(border=True):
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
-                    with col2:
-                        # Botão de upload desabilitado se não houver agendamento selecionado
-                        if not st.session_state.selected_schedule_id:
-                            st.button("Upload", key=f"btn_upload_disabled_{idx}", disabled=True)
-                            st.caption("Selecione um agendamento primeiro")
-                        else:
-                            if st.button("Upload", key=f"btn_upload_{idx}_{up.name}"):
-                                with st.spinner(f"Enviando {up.name}..."):
-                                    try:
-                                        resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
-                                        fid = extract_file_id(resp)
-                                        if fid:
-                                            # Adiciona o arquivo à sessão atual
-                                            st.session_state.current_session_files.append({
-                                                "name": up.name,
-                                                "id": fid,
-                                                "size": up.size,
-                                                "uploaded_at": datetime.now().isoformat()
-                                            })
-                                            
-                                            # Remove o arquivo da lista de pendentes
-                                            st.session_state.pending_uploads.remove(up)
-                                            st.success(f"Upload concluído: {up.name}")
-                                            st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Erro no upload de {up.name}: {e}")
+            with st.spinner("Buscando agendamentos deste mês..."):
+                try:
+                    odata_filter = f"dueDate ge {start_of_month.isoformat()} and dueDate le {end_of_month.isoformat()}"
+                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
+                    st.session_state.last_results = results
+                    st.session_state.kind_key = "debit"
+                    st.session_state.group_by = "data"
+                    st.success(f"Encontrados {len(results)} agendamentos para este mês")
+                except Exception as e:
+                    st.error(f"Erro: {str(e)}")
+    
+    # Busca personalizada
+    st.markdown("### Busca personalizada")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
+        kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
+        st.session_state.kind_key = kind_key
+    
+    with col2:
+        group_by = st.radio("Agrupar por", options=("Data", "Fornecedor/Cliente"), horizontal=True)
+        st.session_state.group_by = "data" if group_by == "Data" else "fornecedor"
+    
+    # Filtros em linha
+    col_desc, col_toggle = st.columns([4, 1])
+    with col_desc:
+        desc_contains = st.text_input("Buscar por descrição ou número", value="", placeholder="Ex: 3344, NF, pagamento")
+    with col_toggle:
+        opened_only = st.toggle("Apenas abertos", value=True)
+    
+    # Datas
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        d_start = st.date_input("Data inicial", value=None)
+    with col_d2:
+        d_end = st.date_input("Data final", value=None)
+    
+    # Botão de busca
+    if st.button("🔍 Buscar agendamentos", use_container_width=True):
+        with st.spinner("Buscando agendamentos..."):
+            try:
+                odata_from_ui = build_odata_filter(
+                    d_start if isinstance(d_start, date) else None,
+                    d_end if isinstance(d_end, date) else None,
+                    None,
+                    desc_contains if desc_contains.strip() else None,
+                    None, None
+                )
+                
+                results = list_schedules(kind_key, opened_only, top=100, odata_filter=odata_from_ui)
+                
+                # Filtra resultados se tiver um número específico na descrição
+                if desc_contains.strip() and is_number(desc_contains.strip()):
+                    results = [r for r in results if desc_contains.strip() in (r.get("description") or "")]
+                
+                st.session_state.last_results = results
+                
+                if not results:
+                    st.warning("Nenhum agendamento encontrado com esses critérios.")
+                else:
+                    st.success(f"Encontrados {len(results)} agendamentos.")
+            except Exception as e:
+                st.error(f"Erro na busca: {str(e)}")
+    
+    # Exibição dos resultados agrupados
+    if st.session_state.last_results:
+        st.markdown("---")
         
-        # Exibe mensagem se não tiver agendamento selecionado
-        if not st.session_state.selected_schedule_id:
-            st.warning("⚠️ Selecione um agendamento na coluna da esquerda para fazer upload e anexar arquivos")
+        if st.session_state.group_by == "data":
+            groups = group_by_due_date(st.session_state.last_results)
+            st.markdown("### Agendamentos agrupados por data")
+        else:
+            groups = group_by_stakeholder(st.session_state.last_results)
+            st.markdown("### Agendamentos agrupados por fornecedor/cliente")
         
-        # Lista de arquivos da sessão atual
-        if st.session_state.current_session_files:
-            st.markdown("### Arquivos da conciliação atual")
-            
-            # Mostra cada arquivo com opção de anexar em um layout mais limpo
-            for idx, file_info in enumerate(st.session_state.current_session_files):
-                with st.container(border=True):
-                    # Layout horizontal com nome do arquivo e botão "Anexar" lado a lado
-                    col_nome, col_botao = st.columns([3, 1])
-                    with col_nome:
-                        st.write(f"{file_info['name']} ({file_info['size']/1024:.1f} KB)")
-                    with col_botao:
-                        # Botão de anexar (se não estiver anexado)
-                        if not file_info.get("attached"):
-                            if st.button("Anexar", key=f"attach_{idx}", use_container_width=True):
-                                with st.spinner("Anexando arquivo..."):
+        # Mostra cada grupo em um expander
+        for group_name, items in groups.items():
+            with st.expander(f"{group_name} ({len(items)} agendamentos)"):
+                for item in items:
+                    lbl = schedule_label(item)
+                    sid = item.get("id") or item.get("scheduleId") or item.get("Id") or item.get("ScheduleId")
+                    
+                    # Verifica se há anexos pendentes para este agendamento
+                    pending_files = [f for f in st.session_state.uploaded_files 
+                                     if not any(a["schedule_id"] == sid and a["file_id"] == f["id"] 
+                                               for a in st.session_state.completed_attachments)]
+                    
+                    with st.container(border=True):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.write(f"**{lbl}**")
+                        
+                        with col2:
+                            # Anexar arquivo diretamente
+                            if pending_files:
+                                file_options = {f["name"]: f["id"] for f in pending_files}
+                                selected_file = st.selectbox(
+                                    "Arquivo", 
+                                    options=list(file_options.keys()),
+                                    key=f"select_file_{sid}"
+                                )
+                                
+                                if st.button("Anexar", key=f"btn_attach_{sid}"):
+                                    file_id = file_options[selected_file]
                                     try:
                                         ok, msg = attach_files(
                                             st.session_state.kind_key,
-                                            st.session_state.selected_schedule_id,
-                                            [file_info['id']]
+                                            sid,
+                                            [file_id]
                                         )
                                         
                                         if ok:
-                                            # Marca o arquivo como anexado
-                                            file_info["attached"] = True
-                                            file_info["attached_at"] = datetime.now().isoformat()
-                                            st.success(f"Arquivo anexado com sucesso!")
+                                            st.session_state.completed_attachments.append({
+                                                "schedule_id": sid,
+                                                "file_id": file_id,
+                                                "file_name": selected_file,
+                                                "attached_at": datetime.now().isoformat()
+                                            })
+                                            st.success("✅ Anexado com sucesso!")
                                             st.rerun()
                                         else:
-                                            st.error(msg)
+                                            st.error(f"Erro: {msg}")
                                     except Exception as e:
-                                        st.error(f"Erro ao anexar: {e}")
-                        else:
-                            # Se já estiver anexado, mostra indicador de sucesso
-                            st.success("✓ Anexado")
+                                        st.error(f"Erro: {str(e)}")
+                            else:
+                                st.info("Sem arquivos pendentes")
+
+# Coluna de upload de arquivos
+with col_upload:
+    st.subheader("Upload e arquivos")
+    
+    # Upload de arquivos
+    uploaded_files = st.file_uploader(
+        "Selecione um ou mais arquivos",
+        type=None,
+        accept_multiple_files=True,
+        key="file_uploader_main"
+    )
+    
+    if uploaded_files:
+        # Adiciona apenas arquivos novos à lista de pendentes
+        for up in uploaded_files:
+            if up.name not in [f.name for f in st.session_state.pending_uploads]:
+                st.session_state.pending_uploads.append(up)
+    
+    # Arquivos pendentes para upload
+    if st.session_state.pending_uploads:
+        st.markdown("### Arquivos pendentes")
+        
+        for idx, up in enumerate(st.session_state.pending_uploads[:]):
+            with st.container(border=True):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"{up.name} ({up.size/1024:.1f} KB)")
+                with col2:
+                    if st.button("Upload", key=f"btn_upload_{idx}"):
+                        with st.spinner(f"Enviando {up.name}..."):
+                            try:
+                                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
+                                fid = extract_file_id(resp)
+                                if fid:
+                                    # Adiciona aos arquivos disponíveis
+                                    st.session_state.uploaded_files.append({
+                                        "id": fid,
+                                        "name": up.name,
+                                        "size": up.size,
+                                        "uploaded_at": datetime.now().isoformat()
+                                    })
+                                    
+                                    # Remove dos pendentes
+                                    st.session_state.pending_uploads.remove(up)
+                                    st.success(f"Upload concluído: {up.name}")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro no upload: {str(e)}")
+    
+    # Arquivos disponíveis para anexar
+    if st.session_state.uploaded_files:
+        st.markdown("### Arquivos disponíveis para anexar")
+        
+        for idx, file in enumerate(st.session_state.uploaded_files):
+            # Verifica se o arquivo já foi anexado a algum agendamento
+            attachments = [a for a in st.session_state.completed_attachments 
+                          if a["file_id"] == file["id"]]
             
-            # Botão para concluir a conciliação
-            if all(file.get("attached", False) for file in st.session_state.current_session_files):
-                if st.button("✅ Concluir Conciliação", use_container_width=True):
-                    # Adiciona ao histórico
-                    st.session_state.history.append({
-                        "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                        "schedule_id": st.session_state.selected_schedule_id,
-                        "schedule_label": st.session_state.selected_label,
-                        "files": st.session_state.current_session_files.copy(),
-                        "kind": st.session_state.kind_key
-                    })
-                    
-                    # Inicia nova conciliação
-                    nova_sessao()
-                    st.success("Conciliação concluída com sucesso!")
-                    st.rerun()
-
-with tab2:
-    st.subheader("Ajuda")
-    st.markdown("""
-    ### Como usar a Conciliação do Nibo
-
-    Esta ferramenta permite fazer o upload de arquivos e anexá-los a agendamentos no Nibo, 
-    mantendo cada conciliação como uma operação independente.
-
-    #### Passo a passo:
-
-    1. **Buscar agendamento**:
-       - Use os filtros na coluna da esquerda para localizar o agendamento desejado
-       - Você pode buscar por número específico na descrição, data ou valor
-       - Selecione o agendamento clicando no botão "Selecionar"
-
-    2. **Upload e anexação de arquivos**:
-       - Faça o upload dos arquivos relacionados ao agendamento selecionado
-       - Cada arquivo aparecerá na lista de "Arquivos da conciliação atual"
-       - Anexe cada arquivo clicando no botão "Anexar"
-       - Quando todos os arquivos estiverem anexados, clique em "Concluir Conciliação"
-
-    3. **Iniciar nova conciliação**:
-       - A qualquer momento, você pode clicar em "Nova Conciliação" na barra lateral
-       - Isso limpará a seleção atual e os arquivos pendentes
-       - O histórico de conciliações anteriores fica disponível no menu lateral
-
-    #### Dicas:
-    - Para buscar agendamentos com um número específico na descrição, digite-o no campo de busca
-    - Você pode alternar entre ver pagamentos e recebimentos conforme necessário
-    - O histórico permite verificar conciliações anteriores
-    """)
+            # Se já foi anexado a todos os agendamentos, não mostra na lista de disponíveis
+            if len(attachments) > 0 and len(st.session_state.last_results) == len(attachments):
+                continue
+                
+            with st.container(border=True):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"{file['name']} ({file['size']/1024:.1f} KB)")
+                    if attachments:
+                        st.caption(f"Anexado a {len(attachments)} agendamentos")
+                
+                with col2:
+                    if not st.session_state.last_results:
+                        st.info("Busque agendamentos")
+                    else:
+                        # Permite selecionar um agendamento para anexar
+                        schedule_options = {}
+                        for item in st.session_state.last_results:
+                            sid = item.get("id") or item.get("scheduleId")
+                            # Verifica se este arquivo já foi anexado a este agendamento
+                            if not any(a["schedule_id"] == sid and a["file_id"] == file["id"] 
+                                      for a in st.session_state.completed_attachments):
+                                schedule_options[schedule_label(item)] = sid
+                        
+                        if schedule_options:
+                            selected_schedule = st.selectbox(
+                                "Anexar a", 
+                                options=list(schedule_options.keys()),
+                                key=f"select_schedule_{file['id']}"
+                            )
+                            
+                            if st.button("Anexar", key=f"attach_btn_{file['id']}"):
+                                sid = schedule_options[selected_schedule]
+                                try:
+                                    ok, msg = attach_files(
+                                        st.session_state.kind_key,
+                                        sid,
+                                        [file["id"]]
+                                    )
+                                    
+                                    if ok:
+                                        st.session_state.completed_attachments.append({
+                                            "schedule_id": sid,
+                                            "file_id": file["id"],
+                                            "file_name": file["name"],
+                                            "schedule_label": selected_schedule,
+                                            "attached_at": datetime.now().isoformat()
+                                        })
+                                        st.success("✅ Anexado com sucesso!")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Erro: {msg}")
+                                except Exception as e:
+                                    st.error(f"Erro: {str(e)}")
+                        else:
+                            st.success("Anexado a todos")
+    
+    # Histórico de anexações
+    if st.session_state.completed_attachments:
+        with st.expander("Histórico de anexações"):
+            for idx, attachment in enumerate(st.session_state.completed_attachments):
+                st.write(f"- {attachment['file_name']} → {attachment.get('schedule_label', 'Agendamento')}")
+            
+            if st.button("Limpar histórico"):
+                st.session_state.completed_attachments = []
+                st.rerun()
 
 # Rodapé
 st.divider()
-st.caption("Ferramenta de Conciliação Nibo • Para cada conciliação nova, use 'Nova Conciliação' no menu lateral")
+st.caption("Ferramenta de anexação de arquivos ao Nibo • Selecione agendamentos, faça upload de arquivos e anexe-os facilmente")
