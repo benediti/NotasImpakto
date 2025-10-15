@@ -398,6 +398,8 @@ st.caption("Use os FileIds recém-enviados ou cole manualmente (um por linha).")
 preset = "\n".join(st.session_state.uploaded_file_ids) if st.session_state.uploaded_file_ids else ""
 file_ids_input = st.text_area("FileIds", value=preset, placeholder="FILE_ID_1\nFILE_ID_2")
 
+selected_schedule_id = st.session_state.get("selected_schedule_id")
+
 can_attach = bool(selected_schedule_id and file_ids_input.strip())
 if st.button("Anexar agora", disabled=not can_attach):
     file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
