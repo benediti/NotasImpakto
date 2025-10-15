@@ -434,18 +434,17 @@ with tab1:
         if st.session_state.current_session_files:
             st.markdown("### Arquivos da conciliação atual")
             
-            # Mostra cada arquivo com opção de anexar
+            # Mostra cada arquivo com opção de anexar em um layout mais limpo
             for idx, file_info in enumerate(st.session_state.current_session_files):
                 with st.container(border=True):
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
+                    # Layout horizontal com nome do arquivo e botão "Anexar" lado a lado
+                    col_nome, col_botao = st.columns([3, 1])
+                    with col_nome:
                         st.write(f"{file_info['name']} ({file_info['size']/1024:.1f} KB)")
-                        if "attached" in file_info and file_info["attached"]:
-                            st.success("✓ Anexado")
-                    with col2:
+                    with col_botao:
                         # Botão de anexar (se não estiver anexado)
                         if not file_info.get("attached"):
-                            if st.button("Anexar", key=f"attach_{idx}"):
+                            if st.button("Anexar", key=f"attach_{idx}", use_container_width=True):
                                 with st.spinner("Anexando arquivo..."):
                                     try:
                                         ok, msg = attach_files(
@@ -464,6 +463,9 @@ with tab1:
                                             st.error(msg)
                                     except Exception as e:
                                         st.error(f"Erro ao anexar: {e}")
+                        else:
+                            # Se já estiver anexado, mostra indicador de sucesso
+                            st.success("✓ Anexado")
             
             # Botão para concluir a conciliação
             if all(file.get("attached", False) for file in st.session_state.current_session_files):
