@@ -359,7 +359,6 @@ with col_agenda:
     st.markdown("### Agendamentos encontrados")
     num_cols = 2  # Cards por linha
     rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
-
     for row in rows:
         cols = st.columns(len(row))
         for idx, lbl in enumerate(row):
