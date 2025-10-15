@@ -5,6 +5,7 @@ import streamlit as st
 from datetime import date, datetime
 from dateutil.parser import parse as dtparse
 from dotenv import load_dotenv
+import re
 
 # ================== Config Básica ==================
 load_dotenv()  # carrega .env se existir
@@ -154,6 +155,10 @@ def attach_files(kind: str, schedule_id: str, file_ids: list[str]) -> tuple[bool
         return True, f"Anexado com sucesso (status {r.status_code})"
     return False, f"Falha ao anexar: status {r.status_code} • resposta: {r.text} • payload: {payload}"
 
+def has_number(s: str) -> bool:
+    """Retorna True se a string contém pelo menos um número."""
+    return bool(re.search(r'\d+', s or ""))
+
 # ================== Sidebar ==================
 with st.sidebar:
     st.header("Configuração")
@@ -225,50 +230,62 @@ if not st.session_state.show_cards_only:
         max_val_str = st.text_input("Valor máximo", value="")
 
     desc_contains = st.text_input("Descrição contém", value="")
-    # stakeholder autocomplete será populado dos resultados. Primeiro mostramos um input livre:
-    stakeholder_free = st.text_input("Fornecedor/Cliente contém", value="")
 
-    odatabuilder_extra = st.text_input("Filtro OData adicional (avançado, opcional)", placeholder="Ex.: year(dueDate) eq 2025 and value ge 100")
+    # Parse min_val and max_val from input strings
+    try:
+        min_val = float(min_val_str) if min_val_str.strip() else None
+    except ValueError:
+        min_val = None
+    try:
+        max_val = float(max_val_str) if max_val_str.strip() else None
+    except ValueError:
+        max_val = None
 
-    def to_float_or_none(s: str):
-        s = (s or "").strip().replace(",", ".")
-        if not s:
-            return None
-        try:
-            return float(s)
-        except ValueError:
-            return None
+    def is_number(s: str) -> bool:
+        return bool(re.fullmatch(r'\d+', s.strip()))
 
-    min_val = to_float_or_none(min_val_str)
-    max_val = to_float_or_none(max_val_str)
-
-    odata_from_ui = build_odata_filter(
-        d_start if isinstance(d_start, date) else None,
-        d_end if isinstance(d_end, date) else None,
-        stakeholder_free if stakeholder_free.strip() else None,
-        desc_contains if desc_contains.strip() else None,
-        min_val, max_val
-    )
-
-    final_filter = ""
-    if odata_from_ui and odatabuilder_extra:
-        final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
-    elif odata_from_ui:
-        final_filter = odata_from_ui
-    elif odatabuilder_extra:
-        final_filter = odatabuilder_extra
-
-    results = []
+    # ================== 2) Filtros & Busca (continuação) ==================
     if st.button("Buscar"):
         try:
+            # Se o campo de descrição contém só número, faz o filtro normalmente
+            # Define stakeholder_free como string vazia, pois não há campo de filtro livre para stakeholder
+            stakeholder_free = ""
+            if desc_contains.strip() and is_number(desc_contains.strip()):
+                odata_from_ui = build_odata_filter(
+                    d_start if isinstance(d_start, date) else None,
+                    d_end if isinstance(d_end, date) else None,
+                    stakeholder_free if stakeholder_free.strip() else None,
+                    desc_contains,
+                    min_val, max_val
+                )
+                final_filter = odata_from_ui
+            else:
+                odata_from_ui = build_odata_filter(
+                    d_start if isinstance(d_start, date) else None,
+                    d_end if isinstance(d_end, date) else None,
+                    stakeholder_free if stakeholder_free.strip() else None,
+                    desc_contains if desc_contains.strip() else None,
+                    min_val, max_val
+                )
+
+                # Defina odatabuilder_extra como string vazia (ou ajuste conforme sua lógica)
+                odatabuilder_extra = ""
+
+                final_filter = ""
+                if odata_from_ui and odatabuilder_extra:
+                    final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
+                elif odata_from_ui:
+                    final_filter = odata_from_ui
+                elif odatabuilder_extra:
+                    final_filter = odatabuilder_extra
+
             results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
             st.session_state.last_results = results or []
-            st.session_state.show_cards_only = True  # Mostra só os cards após buscar
+            st.session_state.show_cards_only = True
             if not results:
-                st.info("Nenhum agendamento encontrado com esses critérios.")
+                st.info("Nenhum agendamento encontrado com esse número na descrição.")
             else:
                 st.success(f"Encontrados {len(results)} agendamentos.")
-                # st.json({"preview": results[:3]})  # Removido para não mostrar a lista
         except Exception as e:
             st.error(str(e))
 else:
