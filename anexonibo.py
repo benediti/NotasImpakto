@@ -175,25 +175,41 @@ if "last_results" not in st.session_state:
 
 # ================== 1) Upload ==================
 st.subheader("1) Upload de arquivos")
-uploads = st.file_uploader("Selecione 1+ arquivos", type=None, accept_multiple_files=True)
-if st.button("Fazer upload"):
-    if not uploads:
-        st.warning("Selecione pelo menos um arquivo.")
-    else:
-        saved = []
-        for up in uploads:
+if "pending_uploads" not in st.session_state:
+    st.session_state.pending_uploads = []
+
+# Seleciona arquivos para a lista de pendentes
+new_uploads = st.file_uploader(
+    "Selecione 1+ arquivos para importar",
+    type=None,
+    accept_multiple_files=True,
+    key="file_uploader"
+)
+if new_uploads:
+    # Adiciona apenas arquivos novos à lista de pendentes
+    for up in new_uploads:
+        if up.name not in [f.name for f in st.session_state.pending_uploads]:
+            st.session_state.pending_uploads.append(up)
+
+st.markdown("**Arquivos pendentes para upload:**")
+remove_idx = None
+for idx, up in enumerate(st.session_state.pending_uploads):
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
+    with col2:
+        if st.button("Fazer upload", key=f"upload_{up.name}"):
             try:
-                # Passa o tipo do arquivo para a função
                 resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
                 fid = extract_file_id(resp)
-                saved.append({"name": up.name, "fileId": fid, "raw": resp})
                 if fid:
                     st.session_state.uploaded_file_ids.append(fid)
+                st.success(f"Upload concluído: {up.name}")
+                remove_idx = idx  # Marca para remover após upload
             except Exception as e:
                 st.error(f"Erro no upload de {up.name}: {e}")
-        if saved:
-            st.success("Upload concluído!")
-            st.json(saved)
+if remove_idx is not None:
+    st.session_state.pending_uploads.pop(remove_idx)
 
 st.divider()
 
