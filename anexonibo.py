@@ -405,12 +405,20 @@ with col_search:
                                         )
                                         
                                         if ok:
+                                            # Adiciona ao histórico de anexações
                                             st.session_state.completed_attachments.append({
                                                 "schedule_id": sid,
                                                 "file_id": file_id,
                                                 "file_name": selected_file,
                                                 "attached_at": datetime.now().isoformat()
                                             })
+                                            
+                                            # Remove o arquivo da lista de disponíveis
+                                            st.session_state.uploaded_files = [
+                                                f for f in st.session_state.uploaded_files 
+                                                if f["id"] != file_id
+                                            ]
+                                            
                                             st.success("✅ Anexado com sucesso!")
                                             st.rerun()
                                         else:
@@ -519,6 +527,7 @@ with col_upload:
                                     )
                                     
                                     if ok:
+                                        # Adiciona ao histórico de anexações
                                         st.session_state.completed_attachments.append({
                                             "schedule_id": sid,
                                             "file_id": file["id"],
@@ -526,6 +535,13 @@ with col_upload:
                                             "schedule_label": selected_schedule,
                                             "attached_at": datetime.now().isoformat()
                                         })
+                                        
+                                        # Remove o arquivo da lista de disponíveis
+                                        st.session_state.uploaded_files = [
+                                            f for f in st.session_state.uploaded_files 
+                                            if f["id"] != file["id"]
+                                        ]
+                                        
                                         st.success("✅ Anexado com sucesso!")
                                         st.rerun()
                                     else:
