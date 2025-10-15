@@ -159,6 +159,9 @@ def has_number(s: str) -> bool:
     """Retorna True se a string contém pelo menos um número."""
     return bool(re.search(r'\d+', s or ""))
 
+def is_number(s: str) -> bool:
+    return bool(re.fullmatch(r'\d+', s.strip()))
+
 # ================== Sidebar ==================
 with st.sidebar:
     st.header("Configuração")
@@ -173,52 +176,24 @@ if "uploaded_file_ids" not in st.session_state:
 if "last_results" not in st.session_state:
     st.session_state.last_results = []
 
-# ================== 1) Upload ==================
-st.subheader("1) Upload de arquivos")
 if "pending_uploads" not in st.session_state:
     st.session_state.pending_uploads = []
 
-# Seleciona arquivos para a lista de pendentes
-new_uploads = st.file_uploader(
-    "Selecione 1+ arquivos para importar",
-    type=None,
-    accept_multiple_files=True,
-    key="file_uploader"
-)
-if new_uploads:
-    # Adiciona apenas arquivos novos à lista de pendentes
-    for up in new_uploads:
-        if up.name not in [f.name for f in st.session_state.pending_uploads]:
-            st.session_state.pending_uploads.append(up)
-
-st.markdown("**Arquivos pendentes para upload:**")
-remove_idx = None
-for idx, up in enumerate(st.session_state.pending_uploads):
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
-    with col2:
-        if st.button("Fazer upload", key=f"upload_{up.name}"):
-            try:
-                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
-                fid = extract_file_id(resp)
-                if fid:
-                    st.session_state.uploaded_file_ids.append(fid)
-                st.success(f"Upload concluído: {up.name}")
-                remove_idx = idx  # Marca para remover após upload
-            except Exception as e:
-                st.error(f"Erro no upload de {up.name}: {e}")
-if remove_idx is not None:
-    st.session_state.pending_uploads.pop(remove_idx)
-
-st.divider()
-
-# ================== 2) Filtros & Busca ==================
 if "show_cards_only" not in st.session_state:
     st.session_state.show_cards_only = False
 
-if not st.session_state.show_cards_only:
-    st.subheader("2) Buscar agendamentos")
+if "selected_label" not in st.session_state:
+    st.session_state.selected_label = None
+
+if "selected_schedule_id" not in st.session_state:
+    st.session_state.selected_schedule_id = None
+
+# ================== Layout principal com tabs ==================
+tab1, tab2, tab3 = st.tabs(["Buscar Agendamentos", "Upload e Anexo", "Ajuda"])
+
+with tab1:
+    st.subheader("Buscar agendamentos")
+    
     col_kind, col_scope = st.columns(2)
     with col_kind:
         kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
@@ -257,164 +232,159 @@ if not st.session_state.show_cards_only:
     except ValueError:
         max_val = None
 
-    def is_number(s: str) -> bool:
-        return bool(re.fullmatch(r'\d+', s.strip()))
-
-    # ================== 2) Filtros & Busca (continuação) ==================
-    if st.button("Buscar"):
+    if st.button("Buscar", key="btn_search"):
         try:
             # Se o campo de descrição contém só número, faz o filtro normalmente
-            # Define stakeholder_free como string vazia, pois não há campo de filtro livre para stakeholder
             stakeholder_free = ""
-            if desc_contains.strip() and is_number(desc_contains.strip()):
-                odata_from_ui = build_odata_filter(
-                    d_start if isinstance(d_start, date) else None,
-                    d_end if isinstance(d_end, date) else None,
-                    stakeholder_free if stakeholder_free.strip() else None,
-                    desc_contains,
-                    min_val, max_val
-                )
+            odatabuilder_extra = ""
+            
+            odata_from_ui = build_odata_filter(
+                d_start if isinstance(d_start, date) else None,
+                d_end if isinstance(d_end, date) else None,
+                stakeholder_free if stakeholder_free.strip() else None,
+                desc_contains if desc_contains.strip() else None,
+                min_val, max_val
+            )
+
+            final_filter = ""
+            if odata_from_ui and odatabuilder_extra:
+                final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
+            elif odata_from_ui:
                 final_filter = odata_from_ui
-            else:
-                odata_from_ui = build_odata_filter(
-                    d_start if isinstance(d_start, date) else None,
-                    d_end if isinstance(d_end, date) else None,
-                    stakeholder_free if stakeholder_free.strip() else None,
-                    desc_contains if desc_contains.strip() else None,
-                    min_val, max_val
-                )
-
-                # Defina odatabuilder_extra como string vazia (ou ajuste conforme sua lógica)
-                odatabuilder_extra = ""
-
-                final_filter = ""
-                if odata_from_ui and odatabuilder_extra:
-                    final_filter = f"({odata_from_ui}) and ({odatabuilder_extra})"
-                elif odata_from_ui:
-                    final_filter = odata_from_ui
-                elif odatabuilder_extra:
-                    final_filter = odatabuilder_extra
+            elif odatabuilder_extra:
+                final_filter = odatabuilder_extra
 
             results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=final_filter)
+            
+            # Filtra resultados se tiver um número na descrição
+            if desc_contains.strip() and is_number(desc_contains.strip()):
+                results = [r for r in results if desc_contains.strip() in (r.get("description") or "")]
+            
             st.session_state.last_results = results or []
-            st.session_state.show_cards_only = True
+            
             if not results:
-                st.info("Nenhum agendamento encontrado com esse número na descrição.")
+                st.info("Nenhum agendamento encontrado com esses critérios.")
             else:
                 st.success(f"Encontrados {len(results)} agendamentos.")
         except Exception as e:
             st.error(str(e))
-else:
-    if st.button("Voltar para filtros"):
-        st.session_state.show_cards_only = False
 
-# ================== 2.1) Autocomplete de Fornecedor/Cliente ==================
-if st.session_state.last_results:
-    # extrai nomes únicos de stakeholder
-    names = set()
-    for it in st.session_state.last_results:
-        for k in ("stakeholder", "client", "supplier"):
-            obj = it.get(k) or {}
-            nm = obj.get("name")
-            if nm:
-                names.add(nm)
-    names_list = sorted(names)
-    if names_list:
-        st.markdown("**Autocomplete de Fornecedor/Cliente** (aplica um contains no nome)")
-        selected_name = st.selectbox("Escolha um nome para filtrar novamente", options=["(não filtrar)"] + names_list)
-        if selected_name != "(não filtrar)":
-            extra_name_filter = build_odata_filter(
-                d_start if isinstance(d_start, date) else None,
-                d_end if isinstance(d_end, date) else None,
-                selected_name,  # usa o nome selecionado
-                desc_contains if desc_contains.strip() else None,
-                min_val, max_val
-            )
-            # combina com filtro avançado, se houver
-            if odatabuilder_extra:
-                extra_name_filter = f"({extra_name_filter}) and ({odatabuilder_extra})"
-            try:
-                results = list_schedules(kind_key, opened_only, top=top, orderby=order, odata_filter=extra_name_filter)
-                st.session_state.last_results = results or []
-                st.success(f"Refinado por fornecedor/cliente: {selected_name} — {len(results)} resultados.")
-                st.json({"preview": results[:3]})
-            except Exception as e:
-                st.error(str(e))
+    # ================== Exibição de resultados em cards ==================
+    if st.session_state.last_results:
+        st.markdown("### Agendamentos encontrados")
+        
+        options = []
+        id_map = {}
+        for it in st.session_state.last_results:
+            lbl = schedule_label(it)
+            sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId")
+            if sid:
+                options.append(lbl or sid)
+                id_map[lbl or sid] = sid
+        
+        # Divide em 2 cards por linha
+        num_cols = 2
+        rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
+        
+        for row in rows:
+            cols = st.columns(len(row))
+            for idx, lbl in enumerate(row):
+                sid = id_map[lbl]
+                with cols[idx]:
+                    with st.container(border=True):
+                        st.markdown(f"**{lbl}**")
+                        if st.button("Selecionar", key=f"card_{sid}"):
+                            st.session_state.selected_label = lbl
+                            st.session_state.selected_schedule_id = sid
+                        if st.session_state.selected_label == lbl:
+                            st.success("✓ Selecionado")
+        
+        st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
 
-# ================== 2.2) Escolha do agendamento como cards ==================
-options = []
-id_map = {}
-for it in st.session_state.last_results:
-    lbl = schedule_label(it)
-    sid = it.get("id") or it.get("scheduleId") or it.get("Id") or it.get("ScheduleId")
-    if sid:
-        options.append(lbl or sid)
-        id_map[lbl or sid] = sid
-
-st.subheader("Upload e Agendamentos")
-
-col_agenda, col_files = st.columns([2, 1])
-
-with col_agenda:
-    st.markdown("### Agendamentos encontrados")
-    num_cols = 2  # Cards por linha
-    rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
-    for row in rows:
-        cols = st.columns(len(row))
-        for idx, lbl in enumerate(row):
-            sid = id_map[lbl]
-            with cols[idx]:
-                st.markdown(f"**{lbl}**")
-                if st.button("Selecionar", key=f"card_{sid}"):
-                    st.session_state.selected_label = lbl
-                    st.session_state.selected_schedule_id = sid
-                if st.session_state.selected_label == lbl:
-                    st.success("Selecionado")
-
-with col_files:
-    st.markdown("### Arquivos pendentes para upload")
-    remove_idx = None
-    for idx, up in enumerate(st.session_state.pending_uploads):
-        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
-        if st.button("Fazer upload", key=f"upload_{up.name}"):
-            try:
-                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
-                fid = extract_file_id(resp)
-                if fid:
-                    st.session_state.uploaded_file_ids.append(fid)
-                st.success(f"Upload concluído: {up.name}")
-                remove_idx = idx
-            except Exception as e:
-                st.error(f"Erro no upload de {up.name}: {e}")
-    if remove_idx is not None:
-        st.session_state.pending_uploads.pop(remove_idx)
-
-st.divider()
-
-# ================== 3) Anexar ==================
-st.subheader("3) Anexar arquivos ao agendamento selecionado")
-st.caption("Use os FileIds recém-enviados ou cole manualmente (um por linha).")
-
-preset = "\n".join(st.session_state.uploaded_file_ids) if st.session_state.uploaded_file_ids else ""
-file_ids_input = st.text_area("FileIds", value=preset, placeholder="FILE_ID_1\nFILE_ID_2")
-
-selected_schedule_id = st.session_state.get("selected_schedule_id")
-
-can_attach = bool(selected_schedule_id and file_ids_input.strip())
-if st.button("Anexar agora", disabled=not can_attach):
-    file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
-    file_ids = [fid for fid in file_ids if fid]
-    if not file_ids:
-        st.error("Nenhum FileId válido informado.")
-    else:
-        ok, msg = attach_files(
-            st.session_state.kind_key if "kind_key" in st.session_state else "debit",
-            selected_schedule_id,
-            file_ids
+with tab2:
+    col_upload, col_attach = st.columns([1, 1])
+    
+    with col_upload:
+        st.subheader("Upload de arquivos")
+        # Seleção de arquivos
+        uploaded_files = st.file_uploader(
+            "Selecione 1+ arquivos para importar",
+            type=None,
+            accept_multiple_files=True,
+            key="file_uploader_tab2"
         )
-        (st.success if ok else st.error)(msg)
+        
+        if uploaded_files:
+            # Adiciona apenas arquivos novos à lista de pendentes
+            for up in uploaded_files:
+                if up.name not in [f.name for f in st.session_state.pending_uploads]:
+                    st.session_state.pending_uploads.append(up)
+        
+        # Lista de arquivos pendentes
+        st.markdown("**Arquivos pendentes:**")
+        remove_idx = None
+        
+        for idx, up in enumerate(st.session_state.pending_uploads):
+            with st.container(border=True):
+                st.write(f"{up.name} ({up.size/1024:.1f} KB)")
+                if st.button("Fazer upload", key=f"btn_upload_{idx}"):
+                    try:
+                        resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
+                        fid = extract_file_id(resp)
+                        if fid:
+                            st.session_state.uploaded_file_ids.append(fid)
+                        st.success(f"Upload concluído: {up.name}")
+                        remove_idx = idx
+                    except Exception as e:
+                        st.error(f"Erro no upload de {up.name}: {e}")
+        
+        if remove_idx is not None:
+            st.session_state.pending_uploads.pop(remove_idx)
+    
+    with col_attach:
+        st.subheader("Anexar ao agendamento")
+        
+        if not st.session_state.selected_schedule_id:
+            st.warning("Selecione um agendamento na aba 'Buscar Agendamentos'")
+        else:
+            st.success(f"Agendamento selecionado: {st.session_state.selected_label}")
+        
+        st.markdown("**FileIDs para anexar:**")
+        preset = "\n".join(st.session_state.uploaded_file_ids) if st.session_state.uploaded_file_ids else ""
+        file_ids_input = st.text_area("(um por linha)", value=preset, placeholder="FILE_ID_1\nFILE_ID_2")
+        
+        can_attach = bool(st.session_state.get("selected_schedule_id") and file_ids_input.strip())
+        
+        if st.button("Anexar arquivos", disabled=not can_attach, key="btn_attach"):
+            file_ids = [l.strip() for l in file_ids_input.splitlines() if l.strip()]
+            file_ids = [fid for fid in file_ids if fid]
+            
+            if not file_ids:
+                st.error("Nenhum FileId válido informado.")
+            else:
+                ok, msg = attach_files(
+                    st.session_state.kind_key if "kind_key" in st.session_state else "debit",
+                    st.session_state.get("selected_schedule_id"),
+                    file_ids
+                )
+                (st.success if ok else st.error)(msg)
 
-
-
-st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
-st.caption("Dica: aumente o 'top' para ver mais itens; para paginação avançada, use $skiptoken se seu endpoint suportar.")
+with tab3:
+    st.subheader("Ajuda")
+    st.markdown("""
+    ### Como usar esta ferramenta:
+    
+    1. **Buscar agendamentos**: 
+       - Na primeira aba, configure os filtros desejados
+       - Clique em "Buscar" para encontrar agendamentos
+       - Selecione um agendamento clicando no botão "Selecionar"
+    
+    2. **Upload e Anexo**:
+       - Na segunda aba, faça upload dos arquivos desejados
+       - Os IDs dos arquivos serão automaticamente listados
+       - Clique em "Anexar arquivos" para vincular ao agendamento selecionado
+    
+    ### Dicas:
+    - Para buscar agendamentos com um número específico na descrição, digite-o no campo "Descrição contém"
+    - Os arquivos são anexados um a um para evitar erros
+    """)
