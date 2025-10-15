@@ -351,29 +351,44 @@ for it in st.session_state.last_results:
         options.append(lbl or sid)
         id_map[lbl or sid] = sid
 
-st.markdown("### Agendamentos encontrados")
-num_cols = 3  # Quantidade de cards por linha
-rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
+st.subheader("Upload e Agendamentos")
 
-if "selected_label" not in st.session_state:
-    st.session_state.selected_label = None
-if "selected_schedule_id" not in st.session_state:
-    st.session_state.selected_schedule_id = None
+col_agenda, col_files = st.columns([2, 1])
 
-for row in rows:
-    cols = st.columns(len(row))
-    for idx, lbl in enumerate(row):
-        sid = id_map[lbl]
-        with cols[idx]:
-            st.markdown(f"**{lbl}**")
-            if st.button("Selecionar", key=f"card_{sid}"):
-                st.session_state.selected_label = lbl
-                st.session_state.selected_schedule_id = sid
-            # Destaca o card selecionado
-            if st.session_state.selected_label == lbl:
-                st.success("Selecionado")
+with col_agenda:
+    st.markdown("### Agendamentos encontrados")
+    num_cols = 2  # Cards por linha
+    rows = [options[i:i+num_cols] for i in range(0, len(options), num_cols)]
 
-selected_schedule_id = st.session_state.selected_schedule_id
+    for row in rows:
+        cols = st.columns(len(row))
+        for idx, lbl in enumerate(row):
+            sid = id_map[lbl]
+            with cols[idx]:
+                st.markdown(f"**{lbl}**")
+                if st.button("Selecionar", key=f"card_{sid}"):
+                    st.session_state.selected_label = lbl
+                    st.session_state.selected_schedule_id = sid
+                if st.session_state.selected_label == lbl:
+                    st.success("Selecionado")
+
+with col_files:
+    st.markdown("### Arquivos pendentes para upload")
+    remove_idx = None
+    for idx, up in enumerate(st.session_state.pending_uploads):
+        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
+        if st.button("Fazer upload", key=f"upload_{up.name}"):
+            try:
+                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
+                fid = extract_file_id(resp)
+                if fid:
+                    st.session_state.uploaded_file_ids.append(fid)
+                st.success(f"Upload concluído: {up.name}")
+                remove_idx = idx
+            except Exception as e:
+                st.error(f"Erro no upload de {up.name}: {e}")
+    if remove_idx is not None:
+        st.session_state.pending_uploads.pop(remove_idx)
 
 st.divider()
 
