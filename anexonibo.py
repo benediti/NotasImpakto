@@ -209,6 +209,111 @@ def group_by_due_date(results):
     
     return groups
 
+def find_nf_number_in_string(text):
+    """Extrai possíveis números de NF de um texto"""
+    # Padrão para NF: números de 5-9 dígitos, podendo ter prefixos como NF:, NFe
+    patterns = [
+        r'NF:?\s*(\d{5,9})', # NF: 3126473
+        r'NFe:?\s*(\d{5,9})', # NFe 3126473
+        r'DANFE\s*(\d{5,9})', # DANFE 3126473
+        r'Nota\s*Fiscal\s*:?\s*(\d{5,9})', # Nota Fiscal: 3126473
+        r'(\d{9})', # Número de 9 dígitos
+        r'(\d{6,8})', # Números de 6-8 dígitos
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        if matches:
+            return matches[0]
+    
+    return None
+
+def find_nf_number_in_filename(filename):
+    """Extrai número de NF de um nome de arquivo"""
+    # Padrão comum para arquivos de NF
+    patterns = [
+        r'0*(\d{5,9})', # 003126473
+        r'NF0*(\d{5,9})', # NF3126473
+        r'NFe0*(\d{5,9})', # NFe3126473
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, filename, re.IGNORECASE)
+        if matches:
+            return matches[0]
+    
+    return None
+
+def calculate_match_score(schedule_item, filename, supplier_id=None):
+    """
+    Calcula pontuação de correspondência entre um agendamento e um arquivo
+    Retorna: (pontuação, razão da correspondência)
+    """
+    score = 0
+    reason = ""
+    
+    # Verifica se o fornecedor corresponde
+    if supplier_id:
+        schedule_supplier_id = (
+            (schedule_item.get("stakeholder") or {}).get("id") or 
+            (schedule_item.get("supplier") or {}).get("id")
+        )
+        if schedule_supplier_id == supplier_id:
+            score += 30
+            reason += "Fornecedor corresponde (+30). "
+    
+    # Extrai e compara números de NF
+    description = schedule_item.get("description", "")
+    nf_in_description = find_nf_number_in_string(description)
+    nf_in_filename = find_nf_number_in_filename(filename)
+    
+    if nf_in_description and nf_in_filename and nf_in_description == nf_in_filename:
+        score += 70
+        reason += f"Número de NF ({nf_in_description}) encontrado em ambos (+70). "
+    
+    # Verifica palavras-chave comuns
+    keywords = ["NF", "DANFE", "FATURA", "BOLETO", "RECIBO", "NOTA"]
+    for keyword in keywords:
+        if keyword in filename.upper() and keyword in description.upper():
+            score += 10
+            reason += f"Palavra-chave '{keyword}' encontrada em ambos (+10). "
+    
+    return score, reason.strip()
+
+def auto_match_files_to_schedules(uploaded_files, schedules, supplier_id=None, threshold=50):
+    """
+    Encontra correspondências automáticas entre arquivos e agendamentos
+    Retorna: lista de (file_id, schedule_id, score, reason)
+    """
+    matches = []
+    
+    for file in uploaded_files:
+        best_match = None
+        best_score = threshold
+        best_reason = ""
+        best_schedule = None
+        
+        for schedule in schedules:
+            score, reason = calculate_match_score(schedule, file["name"], supplier_id)
+            if score > best_score:
+                sid = schedule.get("id") or schedule.get("scheduleId") or schedule.get("Id")
+                best_match = sid
+                best_score = score
+                best_reason = reason
+                best_schedule = schedule
+        
+        if best_match:
+            matches.append({
+                "file_id": file["id"],
+                "file_name": file["name"],
+                "schedule_id": best_match,
+                "schedule_label": schedule_label(best_schedule),
+                "score": best_score,
+                "reason": best_reason
+            })
+    
+    return matches
+
 # ================== Estado ==================
 if "uploaded_file_ids" not in st.session_state:
     st.session_state.uploaded_file_ids = []
@@ -228,6 +333,12 @@ if "uploaded_files" not in st.session_state:
 if "completed_attachments" not in st.session_state:
     st.session_state.completed_attachments = []  # Lista de {schedule_id, file_id}
 
+if "supplier_id" not in st.session_state:
+    st.session_state.supplier_id = "e00a5c53-3f79-4e37-8808-d9c8261daf7f"  # IMPAKTO SIST DE LIMPEZA E DESC LTDA
+
+if "auto_matches" not in st.session_state:
+    st.session_state.auto_matches = []  # Correspondências automáticas encontradas
+
 # ================== Sidebar ==================
 with st.sidebar:
     st.header("Configuração")
@@ -240,6 +351,25 @@ with st.sidebar:
         st.session_state.uploaded_files = []
         st.session_state.pending_uploads = []
         st.session_state.completed_attachments = []
+        st.session_state.auto_matches = []
+        st.rerun()
+    
+    st.markdown("---")
+    st.subheader("Conciliação automática")
+    
+    enable_auto_match = st.toggle("Habilitar conciliação automática", value=True)
+    match_threshold = st.slider(
+        "Limiar de correspondência", 
+        min_value=30, 
+        max_value=100,
+        value=50,
+        help="Pontuação mínima para considerar uma correspondência válida"
+    )
+    
+    st.caption(f"Fornecedor fixo: IMPAKTO SIST DE LIMPEZA E DESC LTDA")
+    
+    if st.button("Limpar correspondências", key="clear_matches"):
+        st.session_state.auto_matches = []
         st.rerun()
 
 # ================== Layout principal com duas colunas ==================
@@ -470,6 +600,17 @@ with col_upload:
                                         "uploaded_at": datetime.now().isoformat()
                                     })
                                     
+                                    # Tenta fazer correspondência automática se habilitado
+                                    if enable_auto_match and st.session_state.last_results:
+                                        matches = auto_match_files_to_schedules(
+                                            [file_info],
+                                            st.session_state.last_results,
+                                            st.session_state.supplier_id,
+                                            match_threshold
+                                        )
+                                        if matches:
+                                            st.session_state.auto_matches.extend(matches)
+                                    
                                     # Remove dos pendentes
                                     st.session_state.pending_uploads.remove(up)
                                     st.success(f"Upload concluído: {up.name}")
@@ -564,3 +705,64 @@ with col_upload:
 # Rodapé
 st.divider()
 st.caption("Ferramenta de anexação de arquivos ao Nibo • Selecione agendamentos, faça upload de arquivos e anexe-os facilmente")
+
+# Adicione uma seção para correspondências automáticas após os arquivos disponíveis
+if st.session_state.auto_matches:
+    st.markdown("### Correspondências automáticas encontradas")
+    
+    # Ordena por pontuação (maior primeiro)
+    sorted_matches = sorted(st.session_state.auto_matches, key=lambda x: x["score"], reverse=True)
+    
+    for idx, match in enumerate(sorted_matches):
+        if any(a["file_id"] == match["file_id"] for a in st.session_state.completed_attachments):
+            continue  # Pula se já anexado
+            
+        with st.container(border=True):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"**{match['file_name']}**")
+                st.write(f"📄 Corresponde a: {match['schedule_label']}")
+                st.caption(f"Confiança: {match['score']}% • {match['reason']}")
+            with col2:
+                if st.button("Confirmar", key=f"confirm_match_{idx}"):
+                    try:
+                        ok, msg = attach_files(
+                            st.session_state.kind_key,
+                            match["schedule_id"],
+                            [match["file_id"]]
+                        )
+                        
+                        if ok:
+                            # Adiciona ao histórico de anexações
+                            st.session_state.completed_attachments.append({
+                                "schedule_id": match["schedule_id"],
+                                "file_id": match["file_id"],
+                                "file_name": match["file_name"],
+                                "schedule_label": match["schedule_label"],
+                                "attached_at": datetime.now().isoformat(),
+                                "auto_matched": True
+                            })
+                            
+                            # Remove o arquivo da lista de disponíveis
+                            st.session_state.uploaded_files = [
+                                f for f in st.session_state.uploaded_files 
+                                if f["id"] != match["file_id"]
+                            ]
+                            
+                            st.success("✅ Anexado com sucesso!")
+                            st.rerun()
+                        else:
+                            st.error(f"Erro: {msg}")
+                    except Exception as e:
+                        st.error(f"Erro: {str(e)}")
+
+# Adicione na seção de histórico um indicador visual para correspondências automáticas
+if st.session_state.completed_attachments:
+    with st.expander("Histórico de anexações"):
+        for idx, attachment in enumerate(st.session_state.completed_attachments):
+            auto_matched = "🤖 " if attachment.get("auto_matched") else ""
+            st.write(f"- {auto_matched}{attachment['file_name']} → {attachment.get('schedule_label', 'Agendamento')}")
+        
+        if st.button("Limpar histórico"):
+            st.session_state.completed_attachments = []
+            st.rerun()
