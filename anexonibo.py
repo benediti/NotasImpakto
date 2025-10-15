@@ -699,7 +699,7 @@ with col_upload:
             for idx, attachment in enumerate(st.session_state.completed_attachments):
                 st.write(f"- {attachment['file_name']} → {attachment.get('schedule_label', 'Agendamento')}")
             
-            if st.button("Limpar histórico"):
+            if st.button("Limpar histórico", key="btn_clear_history_1"):  # ← Adicione uma key única aqui
                 st.session_state.completed_attachments = []
                 st.rerun()
 
@@ -764,6 +764,6 @@ if st.session_state.completed_attachments:
             auto_matched = "🤖 " if attachment.get("auto_matched") else ""
             st.write(f"- {auto_matched}{attachment['file_name']} → {attachment.get('schedule_label', 'Agendamento')}")
         
-        if st.button("Limpar histórico"):
+        if st.button("Limpar histórico", key="btn_clear_history_2"):  # ← Adicione uma key única aqui
             st.session_state.completed_attachments = []
             st.rerun()
