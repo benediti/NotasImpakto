@@ -593,17 +593,18 @@ with col_upload:
                                 fid = extract_file_id(resp)
                                 if fid:
                                     # Adiciona aos arquivos disponíveis
-                                    st.session_state.uploaded_files.append({
+                                    file_info = {  # Define file_info aqui antes de usá-lo
                                         "id": fid,
                                         "name": up.name,
                                         "size": up.size,
                                         "uploaded_at": datetime.now().isoformat()
-                                    })
+                                    }
+                                    st.session_state.uploaded_files.append(file_info)
                                     
                                     # Tenta fazer correspondência automática se habilitado
                                     if enable_auto_match and st.session_state.last_results:
                                         matches = auto_match_files_to_schedules(
-                                            [file_info],
+                                            [file_info],  # Agora file_info já está definido
                                             st.session_state.last_results,
                                             st.session_state.supplier_id,
                                             match_threshold
