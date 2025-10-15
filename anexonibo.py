@@ -376,33 +376,35 @@ with tab1:
     with col_arquivos:
         st.subheader("2. Upload e anexação de arquivos")
         
-        if not st.session_state.selected_schedule_id:
-            st.info("Selecione um agendamento na coluna da esquerda para iniciar a conciliação")
-        else:
-            # Upload de arquivos
-            uploaded_files = st.file_uploader(
-                "Selecione um ou mais arquivos",
-                type=None,
-                accept_multiple_files=True,
-                key="file_uploader_main"
-            )
+        # Upload de arquivos - sempre visível
+        uploaded_files = st.file_uploader(
+            "Selecione um ou mais arquivos",
+            type=None,
+            accept_multiple_files=True,
+            key="file_uploader_main"
+        )
+        
+        if uploaded_files:
+            # Adiciona apenas arquivos novos à lista de pendentes
+            for up in uploaded_files:
+                if up.name not in [f.name for f in st.session_state.pending_uploads]:
+                    st.session_state.pending_uploads.append(up)
+        
+        # Mostra arquivos pendentes para upload
+        if st.session_state.pending_uploads:
+            st.markdown("### Arquivos pendentes para upload")
             
-            if uploaded_files:
-                # Adiciona apenas arquivos novos à lista de pendentes
-                for up in uploaded_files:
-                    if up.name not in [f.name for f in st.session_state.pending_uploads]:
-                        st.session_state.pending_uploads.append(up)
-            
-            # Mostra arquivos pendentes para upload
-            if st.session_state.pending_uploads:
-                st.markdown("### Arquivos pendentes para upload")
-                
-                for idx, up in enumerate(st.session_state.pending_uploads[:]):
-                    with st.container(border=True):
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"{up.name} ({up.size/1024:.1f} KB)")
-                        with col2:
+            for idx, up in enumerate(st.session_state.pending_uploads[:]):
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"{up.name} ({up.size/1024:.1f} KB)")
+                    with col2:
+                        # Botão de upload desabilitado se não houver agendamento selecionado
+                        if not st.session_state.selected_schedule_id:
+                            st.button("Upload", key=f"btn_upload_disabled_{idx}", disabled=True)
+                            st.caption("Selecione um agendamento primeiro")
+                        else:
                             if st.button("Upload", key=f"btn_upload_{idx}_{up.name}"):
                                 with st.spinner(f"Enviando {up.name}..."):
                                     try:
@@ -423,58 +425,62 @@ with tab1:
                                             st.rerun()
                                     except Exception as e:
                                         st.error(f"Erro no upload de {up.name}: {e}")
+        
+        # Exibe mensagem se não tiver agendamento selecionado
+        if not st.session_state.selected_schedule_id:
+            st.warning("⚠️ Selecione um agendamento na coluna da esquerda para fazer upload e anexar arquivos")
+        
+        # Lista de arquivos da sessão atual
+        if st.session_state.current_session_files:
+            st.markdown("### Arquivos da conciliação atual")
             
-            # Lista de arquivos da sessão atual
-            if st.session_state.current_session_files:
-                st.markdown("### Arquivos da conciliação atual")
-                
-                # Mostra cada arquivo com opção de anexar
-                for idx, file_info in enumerate(st.session_state.current_session_files):
-                    with st.container(border=True):
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"{file_info['name']} ({file_info['size']/1024:.1f} KB)")
-                            if "attached" in file_info and file_info["attached"]:
-                                st.success("✓ Anexado")
-                        with col2:
-                            # Botão de anexar (se não estiver anexado)
-                            if not file_info.get("attached"):
-                                if st.button("Anexar", key=f"attach_{idx}"):
-                                    with st.spinner("Anexando arquivo..."):
-                                        try:
-                                            ok, msg = attach_files(
-                                                st.session_state.kind_key,
-                                                st.session_state.selected_schedule_id,
-                                                [file_info['id']]
-                                            )
-                                            
-                                            if ok:
-                                                # Marca o arquivo como anexado
-                                                file_info["attached"] = True
-                                                file_info["attached_at"] = datetime.now().isoformat()
-                                                st.success(f"Arquivo anexado com sucesso!")
-                                                st.rerun()
-                                            else:
-                                                st.error(msg)
-                                        except Exception as e:
-                                            st.error(f"Erro ao anexar: {e}")
-                
-                # Botão para concluir a conciliação
-                if all(file.get("attached", False) for file in st.session_state.current_session_files):
-                    if st.button("✅ Concluir Conciliação", use_container_width=True):
-                        # Adiciona ao histórico
-                        st.session_state.history.append({
-                            "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                            "schedule_id": st.session_state.selected_schedule_id,
-                            "schedule_label": st.session_state.selected_label,
-                            "files": st.session_state.current_session_files.copy(),
-                            "kind": st.session_state.kind_key
-                        })
-                        
-                        # Inicia nova conciliação
-                        nova_sessao()
-                        st.success("Conciliação concluída com sucesso!")
-                        st.rerun()
+            # Mostra cada arquivo com opção de anexar
+            for idx, file_info in enumerate(st.session_state.current_session_files):
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"{file_info['name']} ({file_info['size']/1024:.1f} KB)")
+                        if "attached" in file_info and file_info["attached"]:
+                            st.success("✓ Anexado")
+                    with col2:
+                        # Botão de anexar (se não estiver anexado)
+                        if not file_info.get("attached"):
+                            if st.button("Anexar", key=f"attach_{idx}"):
+                                with st.spinner("Anexando arquivo..."):
+                                    try:
+                                        ok, msg = attach_files(
+                                            st.session_state.kind_key,
+                                            st.session_state.selected_schedule_id,
+                                            [file_info['id']]
+                                        )
+                                        
+                                        if ok:
+                                            # Marca o arquivo como anexado
+                                            file_info["attached"] = True
+                                            file_info["attached_at"] = datetime.now().isoformat()
+                                            st.success(f"Arquivo anexado com sucesso!")
+                                            st.rerun()
+                                        else:
+                                            st.error(msg)
+                                    except Exception as e:
+                                        st.error(f"Erro ao anexar: {e}")
+            
+            # Botão para concluir a conciliação
+            if all(file.get("attached", False) for file in st.session_state.current_session_files):
+                if st.button("✅ Concluir Conciliação", use_container_width=True):
+                    # Adiciona ao histórico
+                    st.session_state.history.append({
+                        "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        "schedule_id": st.session_state.selected_schedule_id,
+                        "schedule_label": st.session_state.selected_label,
+                        "files": st.session_state.current_session_files.copy(),
+                        "kind": st.session_state.kind_key
+                    })
+                    
+                    # Inicia nova conciliação
+                    nova_sessao()
+                    st.success("Conciliação concluída com sucesso!")
+                    st.rerun()
 
 with tab2:
     st.subheader("Ajuda")
