@@ -578,6 +578,46 @@ with col_upload:
             if up.name not in [f.name for f in st.session_state.pending_uploads]:
                 st.session_state.pending_uploads.append(up)
     
+    # Botão para fazer upload de todos os arquivos pendentes
+    if st.session_state.pending_uploads:
+        if st.button("⬆️ Fazer upload de todos os arquivos", use_container_width=True, type="primary"):
+            progress_bar = st.progress(0)
+            total_files = len(st.session_state.pending_uploads)
+            
+            for idx, up in enumerate(st.session_state.pending_uploads[:]):
+                progress_bar.progress((idx) / total_files, text=f"Enviando {up.name}...")
+                
+                try:
+                    resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
+                    fid = extract_file_id(resp)
+                    if fid:
+                        file_info = {
+                            "id": fid,
+                            "name": up.name,
+                            "size": up.size,
+                            "uploaded_at": datetime.now().isoformat()
+                        }
+                        st.session_state.uploaded_files.append(file_info)
+                        
+                        # Tenta fazer correspondência automática se habilitado
+                        if enable_auto_match and st.session_state.last_results:
+                            matches = auto_match_files_to_schedules(
+                                [file_info],
+                                st.session_state.last_results,
+                                st.session_state.supplier_id,
+                                match_threshold
+                            )
+                            if matches:
+                                st.session_state.auto_matches.extend(matches)
+                        
+                        st.session_state.pending_uploads.remove(up)
+                except Exception as e:
+                    st.error(f"Erro no upload de {up.name}: {str(e)}")
+            
+            progress_bar.progress(1.0, text="Upload concluído!")
+            st.success(f"✅ {total_files} arquivo(s) enviado(s) com sucesso!")
+            st.rerun()
+    
     # Arquivos pendentes para upload
     if st.session_state.pending_uploads:
         st.markdown("### Arquivos pendentes")
@@ -711,15 +751,77 @@ st.caption("Ferramenta de anexação de arquivos ao Nibo • Selecione agendamen
 
 # Adicione uma seção para correspondências automáticas após os arquivos disponíveis
 if st.session_state.auto_matches:
-    st.markdown("### Correspondências automáticas encontradas")
+    st.markdown("### 🤖 Correspondências automáticas encontradas")
     
     # Ordena por pontuação (maior primeiro)
     sorted_matches = sorted(st.session_state.auto_matches, key=lambda x: x["score"], reverse=True)
     
-    for idx, match in enumerate(sorted_matches):
-        if any(a["file_id"] == match["file_id"] for a in st.session_state.completed_attachments):
-            continue  # Pula se já anexado
-            
+    # Filtra apenas as que ainda não foram anexadas
+    pending_matches = [m for m in sorted_matches 
+                      if not any(a["file_id"] == m["file_id"] and a["schedule_id"] == m["schedule_id"] 
+                                for a in st.session_state.completed_attachments)]
+    
+    if pending_matches:
+        # Botão para confirmar todas as correspondências
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("✅ Confirmar todas as correspondências", use_container_width=True, type="primary"):
+                progress_bar = st.progress(0)
+                total = len(pending_matches)
+                success_count = 0
+                error_count = 0
+                
+                for idx, match in enumerate(pending_matches):
+                    progress_bar.progress(idx / total, text=f"Anexando {match['file_name']}...")
+                    
+                    try:
+                        ok, msg = attach_files(
+                            st.session_state.kind_key,
+                            match["schedule_id"],
+                            [match["file_id"]]
+                        )
+                        
+                        if ok:
+                            st.session_state.completed_attachments.append({
+                                "schedule_id": match["schedule_id"],
+                                "file_id": match["file_id"],
+                                "file_name": match["file_name"],
+                                "schedule_label": match["schedule_label"],
+                                "attached_at": datetime.now().isoformat(),
+                                "auto_matched": True,
+                                "score": match["score"]
+                            })
+                            
+                            # Remove o arquivo da lista de disponíveis
+                            st.session_state.uploaded_files = [
+                                f for f in st.session_state.uploaded_files 
+                                if f["id"] != match["file_id"]
+                            ]
+                            success_count += 1
+                        else:
+                            error_count += 1
+                            st.error(f"❌ {match['file_name']}: {msg}")
+                    except Exception as e:
+                        error_count += 1
+                        st.error(f"❌ {match['file_name']}: {str(e)}")
+                
+                progress_bar.progress(1.0, text="Concluído!")
+                
+                if success_count > 0:
+                    st.success(f"✅ {success_count} arquivo(s) anexado(s) com sucesso!")
+                if error_count > 0:
+                    st.warning(f"⚠️ {error_count} erro(s) durante o processo")
+                
+                st.rerun()
+        
+        with col_btn2:
+            if st.button("🗑️ Limpar sugestões", use_container_width=True):
+                st.session_state.auto_matches = []
+                st.rerun()
+        
+        st.divider()
+    
+    for idx, match in enumerate(pending_matches):
         with st.container(border=True):
             col1, col2 = st.columns([4, 1])
             with col1:
@@ -758,6 +860,8 @@ if st.session_state.auto_matches:
                             st.error(f"Erro: {msg}")
                     except Exception as e:
                         st.error(f"Erro: {str(e)}")
+    else:
+        st.info("✅ Todas as correspondências já foram processadas!")
 
 # Adicione na seção de histórico um indicador visual para correspondências automáticas
 if st.session_state.completed_attachments:
