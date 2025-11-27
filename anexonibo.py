@@ -386,126 +386,47 @@ col_search, col_upload = st.columns([3, 2])
 
 # Coluna de busca e visualização de agendamentos
 with col_search:
-    st.subheader("Buscar agendamentos")
+    st.subheader("🔍 Buscar agendamentos da IMPAKTO")
     
-    # Botões de busca rápida
-    st.markdown("### Busca rápida")
-    quick_search_cols = st.columns(3)
-    
-    with quick_search_cols[0]:
-        if st.button("📅 Hoje", use_container_width=True):
-            today = date.today()
-            with st.spinner("Buscando agendamentos de hoje..."):
-                try:
-                    odata_filter = f"dueDate ge {today.isoformat()} and dueDate le {today.isoformat()}"
-                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
-                    st.session_state.last_results = results
-                    st.session_state.kind_key = "debit"
-                    st.session_state.group_by = "data"
-                    st.success(f"Encontrados {len(results)} agendamentos para hoje")
-                except Exception as e:
-                    st.error(f"Erro: {str(e)}")
-    
-    with quick_search_cols[1]:
-        if st.button("📅 Esta semana", use_container_width=True):
-            today = date.today()
-            start_of_week = today - timedelta(days=today.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            with st.spinner("Buscando agendamentos desta semana..."):
-                try:
-                    odata_filter = f"dueDate ge {start_of_week.isoformat()} and dueDate le {end_of_week.isoformat()}"
-                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
-                    st.session_state.last_results = results
-                    st.session_state.kind_key = "debit"
-                    st.session_state.group_by = "data"
-                    st.success(f"Encontrados {len(results)} agendamentos para esta semana")
-                except Exception as e:
-                    st.error(f"Erro: {str(e)}")
-    
-    with quick_search_cols[2]:
-        if st.button("📅 Este mês", use_container_width=True):
-            today = date.today()
-            start_of_month = date(today.year, today.month, 1)
-            if today.month == 12:
-                end_of_month = date(today.year+1, 1, 1) - timedelta(days=1)
-            else:
-                end_of_month = date(today.year, today.month+1, 1) - timedelta(days=1)
-            
-            with st.spinner("Buscando agendamentos deste mês..."):
-                try:
-                    odata_filter = f"dueDate ge {start_of_month.isoformat()} and dueDate le {end_of_month.isoformat()}"
-                    results = list_schedules("debit", True, top=100, odata_filter=odata_filter)
-                    st.session_state.last_results = results
-                    st.session_state.kind_key = "debit"
-                    st.session_state.group_by = "data"
-                    st.success(f"Encontrados {len(results)} agendamentos para este mês")
-                except Exception as e:
-                    st.error(f"Erro: {str(e)}")
-    
-    # Busca personalizada
-    st.markdown("### Busca personalizada")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        kind = st.radio("Tipo", options=("Pagamentos (debit)", "Recebimentos (credit)"), horizontal=True)
-        kind_key = "debit" if kind.startswith("Pagamentos") else "credit"
-        st.session_state.kind_key = kind_key
-    
-    with col2:
-        group_by = st.radio("Agrupar por", options=("Data", "Fornecedor/Cliente"), horizontal=True)
-        st.session_state.group_by = "data" if group_by == "Data" else "fornecedor"
-    
-    # Filtros em linha
-    col_desc, col_toggle = st.columns([4, 1])
-    with col_desc:
-        desc_contains = st.text_input("Buscar por descrição ou número", value="", placeholder="Ex: 3344, NF, pagamento")
-    with col_toggle:
-        opened_only = st.toggle("Apenas abertos", value=True)
-    
-    # Datas
+    # Filtro de data simplificado
     col_d1, col_d2 = st.columns(2)
     with col_d1:
         d_start = st.date_input("Data inicial", value=None)
     with col_d2:
         d_end = st.date_input("Data final", value=None)
     
+    # Define valores padrão fixos
+    kind_key = "debit"  # Sempre pagamentos
+    opened_only = True  # Sempre apenas abertos
+    st.session_state.kind_key = kind_key
+    
     # Botão de busca
-    if st.button("🔍 Buscar agendamentos", use_container_width=True):
-        with st.spinner("Buscando agendamentos..."):
+    if st.button("🔍 Buscar agendamentos", use_container_width=True, type="primary"):
+        with st.spinner("Buscando agendamentos da IMPAKTO..."):
             try:
                 odata_from_ui = build_odata_filter(
                     d_start if isinstance(d_start, date) else None,
                     d_end if isinstance(d_end, date) else None,
                     None,
-                    desc_contains if desc_contains.strip() else None,
+                    None,
                     None, None
                 )
                 
                 results = list_schedules(kind_key, opened_only, top=100, odata_filter=odata_from_ui)
-                
-                # Filtra resultados se tiver um número específico na descrição
-                if desc_contains.strip() and is_number(desc_contains.strip()):
-                    results = [r for r in results if desc_contains.strip() in (r.get("description") or "")]
-                
                 st.session_state.last_results = results
                 
                 if not results:
                     st.warning("Nenhum agendamento encontrado com esses critérios.")
                 else:
-                    st.success(f"Encontrados {len(results)} agendamentos.")
+                    st.success(f"✅ Encontrados {len(results)} agendamentos")
             except Exception as e:
                 st.error(f"Erro na busca: {str(e)}")
     
-    # Exibição dos resultados agrupados
+    # Exibição dos resultados agrupados por data (fixo)
     if st.session_state.last_results:
         st.markdown("---")
-        
-        if st.session_state.group_by == "data":
-            groups = group_by_due_date(st.session_state.last_results)
-            st.markdown("### Agendamentos agrupados por data")
-        else:
-            groups = group_by_stakeholder(st.session_state.last_results)
-            st.markdown("### Agendamentos agrupados por fornecedor/cliente")
+        groups = group_by_due_date(st.session_state.last_results)
+        st.markdown("### 📋 Agendamentos por data")
         
         # Mostra cada grupo em um expander
         for group_name, items in groups.items():
@@ -569,7 +490,7 @@ with col_search:
 
 # Coluna de upload de arquivos
 with col_upload:
-    st.subheader("Upload e arquivos")
+    st.subheader("📤 Upload de arquivos")
     
     # Upload de arquivos
     uploaded_files = st.file_uploader(
