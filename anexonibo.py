@@ -213,12 +213,10 @@ def find_nf_number_in_string(text):
     """Extrai possíveis números de NF de um texto"""
     # Padrão para NF: números de 5-9 dígitos, podendo ter prefixos como NF:, NFe
     patterns = [
-        r'NF:?\s*0*(\d{5,9})(?:-\d+)?', # NF: 003126473 ou NF: 3126473-1
-        r'NFe:?\s*0*(\d{5,9})(?:-\d+)?', # NFe 003126473 ou NFe 3126473-1
-        r'DANFE\s*0*(\d{5,9})(?:-\d+)?', # DANFE 003126473 ou DANFE 3126473-1
-        r'Nota\s*Fiscal\s*:?\s*0*(\d{5,9})(?:-\d+)?', # Nota Fiscal: 003126473
-        r'0*(\d{9})(?:-\d+)?', # Número de 9 dígitos com zeros à esquerda
-        r'0*(\d{6,8})(?:-\d+)?', # Números de 6-8 dígitos com zeros à esquerda
+        r'NF:?\s*0*(\d{7,9})(?:-\d+)?', # NF: 003126473 ou NF: 3126473-1 (7-9 dígitos)
+        r'NFe:?\s*0*(\d{7,9})(?:-\d+)?', # NFe 003126473 ou NFe 3126473-1
+        r'DANFE\s*0*(\d{7,9})(?:-\d+)?', # DANFE 003126473 ou DANFE 3126473-1
+        r'Nota\s*Fiscal\s*:?\s*0*(\d{7,9})(?:-\d+)?', # Nota Fiscal: 003126473
     ]
     
     for pattern in patterns:
@@ -231,11 +229,11 @@ def find_nf_number_in_string(text):
 
 def find_nf_number_in_filename(filename):
     """Extrai número de NF de um nome de arquivo"""
-    # Padrão comum para arquivos de NF
+    # Padrão comum para arquivos de NF (7-9 dígitos)
     patterns = [
-        r'0*(\d{5,9})(?:-\d+)?', # 003126473 ou 003145454-1
-        r'NF0*(\d{5,9})(?:-\d+)?', # NF3126473 ou NF3145454-1
-        r'NFe0*(\d{5,9})(?:-\d+)?', # NFe3126473 ou NFe3145454-1
+        r'0*(\d{7,9})(?:-\d+)?', # 003126473 ou 003145454-1 (7-9 dígitos)
+        r'NF0*(\d{7,9})(?:-\d+)?', # NF3126473 ou NF3145454-1
+        r'NFe0*(\d{7,9})(?:-\d+)?', # NFe3126473 ou NFe3145454-1
     ]
     
     for pattern in patterns:
@@ -254,17 +252,20 @@ def calculate_match_score(schedule_item, filename, supplier_id=None):
     score = 0
     reason = ""
     
-    # Verifica se o fornecedor corresponde
+    # PRIORIDADE 1: Verifica se o fornecedor corresponde (OBRIGATÓRIO)
     if supplier_id:
         schedule_supplier_id = (
             (schedule_item.get("stakeholder") or {}).get("id") or 
             (schedule_item.get("supplier") or {}).get("id")
         )
-        if schedule_supplier_id == supplier_id:
-            score += 30
-            reason += "Fornecedor corresponde (+30). "
+        # Se o fornecedor NÃO corresponde, retorna pontuação ZERO (não considera este agendamento)
+        if schedule_supplier_id != supplier_id:
+            return 0, "Fornecedor não corresponde - ignorado"
+        
+        score += 30
+        reason += "Fornecedor IMPAKTO corresponde (+30). "
     
-    # Extrai e compara números de NF
+    # PRIORIDADE 2: Extrai e compara números de NF
     description = schedule_item.get("description", "")
     nf_in_description = find_nf_number_in_string(description)
     nf_in_filename = find_nf_number_in_filename(filename)
@@ -273,12 +274,10 @@ def calculate_match_score(schedule_item, filename, supplier_id=None):
         score += 70
         reason += f"Número de NF ({nf_in_description}) encontrado em ambos (+70). "
     
-    # Verifica palavras-chave comuns
-    keywords = ["NF", "DANFE", "FATURA", "BOLETO", "RECIBO", "NOTA"]
-    for keyword in keywords:
-        if keyword in filename.upper() and keyword in description.upper():
-            score += 10
-            reason += f"Palavra-chave '{keyword}' encontrada em ambos (+10). "
+    # PRIORIDADE 3: Verifica palavras-chave comuns (apenas NF e DANFE são relevantes)
+    if "NF" in description.upper():
+        score += 5
+        reason += "Palavra-chave 'NF' na descrição (+5). "
     
     return score, reason.strip()
 
@@ -364,8 +363,8 @@ with st.sidebar:
         "Limiar de correspondência", 
         min_value=30, 
         max_value=100,
-        value=50,
-        help="Pontuação mínima para considerar uma correspondência válida"
+        value=100,
+        help="Pontuação mínima para considerar uma correspondência válida. 100 = apenas correspondências perfeitas (fornecedor + NF)"
     )
     
     st.caption(f"Fornecedor fixo: IMPAKTO SIST DE LIMPEZA E DESC LTDA")
