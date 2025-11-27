@@ -213,18 +213,19 @@ def find_nf_number_in_string(text):
     """Extrai possíveis números de NF de um texto"""
     # Padrão para NF: números de 5-9 dígitos, podendo ter prefixos como NF:, NFe
     patterns = [
-        r'NF:?\s*(\d{5,9})', # NF: 3126473
-        r'NFe:?\s*(\d{5,9})', # NFe 3126473
-        r'DANFE\s*(\d{5,9})', # DANFE 3126473
-        r'Nota\s*Fiscal\s*:?\s*(\d{5,9})', # Nota Fiscal: 3126473
-        r'(\d{9})', # Número de 9 dígitos
-        r'(\d{6,8})', # Números de 6-8 dígitos
+        r'NF:?\s*0*(\d{5,9})(?:-\d+)?', # NF: 003126473 ou NF: 3126473-1
+        r'NFe:?\s*0*(\d{5,9})(?:-\d+)?', # NFe 003126473 ou NFe 3126473-1
+        r'DANFE\s*0*(\d{5,9})(?:-\d+)?', # DANFE 003126473 ou DANFE 3126473-1
+        r'Nota\s*Fiscal\s*:?\s*0*(\d{5,9})(?:-\d+)?', # Nota Fiscal: 003126473
+        r'0*(\d{9})(?:-\d+)?', # Número de 9 dígitos com zeros à esquerda
+        r'0*(\d{6,8})(?:-\d+)?', # Números de 6-8 dígitos com zeros à esquerda
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)
         if matches:
-            return matches[0]
+            # Remove zeros à esquerda do número capturado
+            return matches[0].lstrip('0') or '0'
     
     return None
 
