@@ -213,16 +213,18 @@ def find_nf_number_in_string(text):
     """Extrai possíveis números de NF de um texto"""
     # Padrão para NF: ignora zeros à esquerda
     patterns = [
-        r'NF:?\s*0*([1-9]\d{6,8})(?:-\d+)?',              # NF: 003145455 -> captura 3145455
-        r'NFe:?\s*0*([1-9]\d{6,8})(?:-\d+)?',             # NFe 003145455 -> captura 3145455
-        r'DANFE\s*0*([1-9]\d{6,8})(?:-\d+)?',             # DANFE 003145455 -> captura 3145455
-        r'Nota\s*Fiscal\s*:?\s*0*([1-9]\d{6,8})(?:-\d+)?', # Nota Fiscal: 003145455 -> captura 3145455
+        r'NF:?\s*0*([1-9]\d{5,8})',                       # NF: 3145455 ou NF:3145455 (6-9 dígitos total)
+        r'NFe:?\s*0*([1-9]\d{5,8})',                      # NFe 3145455
+        r'DANFE\s*0*([1-9]\d{5,8})',                      # DANFE 3145455
+        r'Nota\s*Fiscal\s*:?\s*0*([1-9]\d{5,8})',         # Nota Fiscal: 3145455
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)
         if matches:
-            return matches[0]  # Já vem sem zeros à esquerda pelo padrão [1-9]\d{...}
+            return matches[0]
+    
+    return None
     
     return None
 
@@ -233,15 +235,15 @@ def find_nf_number_in_filename(filename):
     
     # Padrão para capturar: zeros à esquerda (fora do grupo) + número (dentro do grupo)
     patterns = [
-        r'(?:^|[^0-9])0*([1-9]\d{6,8})(?:-\d+)?',  # 003145455 -> captura 3145455 (sem zeros à esquerda)
-        r'NF:?\s*0*([1-9]\d{6,8})(?:-\d+)?',       # NF 003145455 -> captura 3145455
-        r'NFe:?\s*0*([1-9]\d{6,8})(?:-\d+)?',      # NFe 003145455 -> captura 3145455
+        r'(?:^|[^0-9])0*([1-9]\d{5,8})',  # 003145455 -> captura 3145455 (6-9 dígitos total)
+        r'NF:?\s*0*([1-9]\d{5,8})',       # NF 003145455 -> captura 3145455
+        r'NFe:?\s*0*([1-9]\d{5,8})',      # NFe 003145455 -> captura 3145455
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, filename_no_ext, re.IGNORECASE)
         if matches:
-            return matches[0]  # Já vem sem zeros à esquerda pelo padrão [1-9]\d{...}
+            return matches[0]
     
     return None
 
