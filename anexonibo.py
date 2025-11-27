@@ -368,14 +368,9 @@ with st.sidebar:
     st.subheader("Conciliação automática")
     
     enable_auto_match = st.toggle("Habilitar conciliação automática", value=True)
-    match_threshold = st.slider(
-        "Limiar de correspondência", 
-        min_value=100, 
-        max_value=100,
-        value=100,
-        disabled=True,
-        help="Fixado em 100% - apenas correspondências perfeitas (fornecedor IMPAKTO + número de NF idêntico)"
-    )
+    
+    st.caption("✅ Limiar fixado em 100% - apenas correspondências perfeitas (fornecedor IMPAKTO + número de NF idêntico)")
+    match_threshold = 100  # Valor fixo
     
     st.caption(f"Fornecedor fixo: IMPAKTO SIST DE LIMPEZA E DESC LTDA")
     
