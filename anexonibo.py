@@ -622,44 +622,10 @@ with col_upload:
     if st.session_state.pending_uploads:
         st.markdown("### Arquivos pendentes")
         
+        # Mostra os arquivos pendentes
         for idx, up in enumerate(st.session_state.pending_uploads[:]):
             with st.container(border=True):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"{up.name} ({up.size/1024:.1f} KB)")
-                with col2:
-                    if st.button("Upload", key=f"btn_upload_{idx}"):
-                        with st.spinner(f"Enviando {up.name}..."):
-                            try:
-                                resp = upload_file_to_nibo(up.name, up.getvalue(), up.type)
-                                fid = extract_file_id(resp)
-                                if fid:
-                                    # Adiciona aos arquivos disponíveis
-                                    file_info = {  # Define file_info aqui antes de usá-lo
-                                        "id": fid,
-                                        "name": up.name,
-                                        "size": up.size,
-                                        "uploaded_at": datetime.now().isoformat()
-                                    }
-                                    st.session_state.uploaded_files.append(file_info)
-                                    
-                                    # Tenta fazer correspondência automática se habilitado
-                                    if enable_auto_match and st.session_state.last_results:
-                                        matches = auto_match_files_to_schedules(
-                                            [file_info],  # Agora file_info já está definido
-                                            st.session_state.last_results,
-                                            st.session_state.supplier_id,
-                                            match_threshold
-                                        )
-                                        if matches:
-                                            st.session_state.auto_matches.extend(matches)
-                                    
-                                    # Remove dos pendentes
-                                    st.session_state.pending_uploads.remove(up)
-                                    st.success(f"Upload concluído: {up.name}")
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro no upload: {str(e)}")
+                st.write(f"{up.name} ({up.size/1024:.1f} KB)")
     
     # Arquivos disponíveis para anexar
     if st.session_state.uploaded_files:
