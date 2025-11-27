@@ -232,15 +232,16 @@ def find_nf_number_in_filename(filename):
     """Extrai número de NF de um nome de arquivo"""
     # Padrão comum para arquivos de NF
     patterns = [
-        r'0*(\d{5,9})', # 003126473
-        r'NF0*(\d{5,9})', # NF3126473
-        r'NFe0*(\d{5,9})', # NFe3126473
+        r'0*(\d{5,9})(?:-\d+)?', # 003126473 ou 003145454-1
+        r'NF0*(\d{5,9})(?:-\d+)?', # NF3126473 ou NF3145454-1
+        r'NFe0*(\d{5,9})(?:-\d+)?', # NFe3126473 ou NFe3145454-1
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, filename, re.IGNORECASE)
         if matches:
-            return matches[0]
+            # Remove zeros à esquerda do número capturado
+            return matches[0].lstrip('0') or '0'
     
     return None
 
