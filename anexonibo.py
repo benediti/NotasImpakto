@@ -718,13 +718,12 @@ with col_upload:
                 st.session_state.completed_attachments = []
                 st.rerun()
 
-# Rodapé
+# Seção de correspondências automáticas - ABAIXO das colunas
 st.divider()
-st.caption("Ferramenta de anexação de arquivos ao Nibo • Selecione agendamentos, faça upload de arquivos e anexe-os facilmente")
 
-# Adicione uma seção para correspondências automáticas após os arquivos disponíveis
 if st.session_state.auto_matches:
-    st.markdown("### 🤖 Correspondências automáticas encontradas")
+    st.markdown("## 🤖 Correspondências Automáticas Encontradas")
+    st.info("📋 O sistema encontrou correspondências entre os arquivos enviados e os agendamentos. Revise e confirme abaixo:")
     
     # Ordena por pontuação (maior primeiro)
     sorted_matches = sorted(st.session_state.auto_matches, key=lambda x: x["score"], reverse=True)
@@ -735,10 +734,12 @@ if st.session_state.auto_matches:
                                 for a in st.session_state.completed_attachments)]
     
     if pending_matches:
+        st.markdown(f"**{len(pending_matches)} correspondência(s) pendente(s)**")
+        
         # Botão para confirmar todas as correspondências
-        col_btn1, col_btn2 = st.columns(2)
+        col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
         with col_btn1:
-            if st.button("✅ Confirmar todas as correspondências", use_container_width=True, type="primary"):
+            if st.button("✅ Confirmar todas as correspondências", use_container_width=True, type="primary", key="confirm_all_matches"):
                 progress_bar = st.progress(0)
                 total = len(pending_matches)
                 success_count = 0
@@ -788,61 +789,83 @@ if st.session_state.auto_matches:
                 st.rerun()
         
         with col_btn2:
-            if st.button("🗑️ Limpar sugestões", use_container_width=True):
+            if st.button("🗑️ Limpar sugestões", use_container_width=True, key="clear_suggestions"):
                 st.session_state.auto_matches = []
                 st.rerun()
         
-        st.divider()
-    
-    for idx, match in enumerate(pending_matches):
-        with st.container(border=True):
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.write(f"**{match['file_name']}**")
-                st.write(f"📄 Corresponde a: {match['schedule_label']}")
-                st.caption(f"Confiança: {match['score']}% • {match['reason']}")
-            with col2:
-                if st.button("Confirmar", key=f"confirm_match_{idx}"):
-                    try:
-                        ok, msg = attach_files(
-                            st.session_state.kind_key,
-                            match["schedule_id"],
-                            [match["file_id"]]
-                        )
-                        
-                        if ok:
-                            # Adiciona ao histórico de anexações
-                            st.session_state.completed_attachments.append({
-                                "schedule_id": match["schedule_id"],
-                                "file_id": match["file_id"],
-                                "file_name": match["file_name"],
-                                "schedule_label": match["schedule_label"],
-                                "attached_at": datetime.now().isoformat(),
-                                "auto_matched": True
-                            })
-                            
-                            # Remove o arquivo da lista de disponíveis
-                            st.session_state.uploaded_files = [
-                                f for f in st.session_state.uploaded_files 
-                                if f["id"] != match["file_id"]
-                            ]
-                            
-                            st.success("✅ Anexado com sucesso!")
-                            st.rerun()
-                        else:
-                            st.error(f"Erro: {msg}")
-                    except Exception as e:
-                        st.error(f"Erro: {str(e)}")
-    else:
-        st.info("✅ Todas as correspondências já foram processadas!")
-
-# Adicione na seção de histórico um indicador visual para correspondências automáticas
-if st.session_state.completed_attachments:
-    with st.expander("Histórico de anexações"):
-        for idx, attachment in enumerate(st.session_state.completed_attachments):
-            auto_matched = "🤖 " if attachment.get("auto_matched") else ""
-            st.write(f"- {auto_matched}{attachment['file_name']} → {attachment.get('schedule_label', 'Agendamento')}")
+        with col_btn3:
+            st.empty()  # Espaço vazio para layout
         
-        if st.button("Limpar histórico", key="btn_clear_history_2"):  # ← Adicione uma key única aqui
-            st.session_state.completed_attachments = []
-            st.rerun()
+        st.divider()
+        
+        # Lista de correspondências
+        for idx, match in enumerate(pending_matches):
+            with st.container(border=True):
+                # Cabeçalho do arquivo
+                col_header1, col_header2 = st.columns([5, 1])
+                with col_header1:
+                    st.markdown(f"### 📄 {match['file_name']}")
+                with col_header2:
+                    if st.button("✓ Confirmar", key=f"confirm_match_{idx}", type="primary"):
+                        try:
+                            ok, msg = attach_files(
+                                st.session_state.kind_key,
+                                match["schedule_id"],
+                                [match["file_id"]]
+                            )
+                            
+                            if ok:
+                                # Adiciona ao histórico de anexações
+                                st.session_state.completed_attachments.append({
+                                    "schedule_id": match["schedule_id"],
+                                    "file_id": match["file_id"],
+                                    "file_name": match["file_name"],
+                                    "schedule_label": match["schedule_label"],
+                                    "attached_at": datetime.now().isoformat(),
+                                    "auto_matched": True
+                                })
+                                
+                                # Remove o arquivo da lista de disponíveis
+                                st.session_state.uploaded_files = [
+                                    f for f in st.session_state.uploaded_files 
+                                    if f["id"] != match["file_id"]
+                                ]
+                                
+                                st.success("✅ Anexado com sucesso!")
+                                st.rerun()
+                            else:
+                                st.error(f"Erro: {msg}")
+                        except Exception as e:
+                            st.error(f"Erro: {str(e)}")
+                
+                # Detalhes da correspondência
+                st.markdown(f"**🎯 Corresponde a:**")
+                st.info(match['schedule_label'])
+                
+                # Badge de confiança
+                confidence_color = "🟢" if match['score'] >= 100 else "🟡" if match['score'] >= 70 else "🔴"
+                st.caption(f"{confidence_color} **Confiança: {match['score']}%** • {match['reason']}")
+    else:
+        st.success("✅ Todas as correspondências já foram processadas!")
+else:
+    # Mensagem quando não há correspondências
+    if st.session_state.uploaded_files and st.session_state.last_results:
+        st.info("ℹ️ Nenhuma correspondência automática encontrada. Você pode anexar manualmente usando a seção acima.")
+
+# Histórico de anexações
+if st.session_state.completed_attachments:
+    st.divider()
+    st.markdown("## 📋 Histórico de Anexações")
+    
+    for idx, attachment in enumerate(st.session_state.completed_attachments):
+        auto_matched = "🤖 " if attachment.get("auto_matched") else "📎 "
+        score_info = f" (Confiança: {attachment.get('score', 'N/A')}%)" if attachment.get("auto_matched") else ""
+        st.success(f"{auto_matched}**{attachment['file_name']}** → {attachment.get('schedule_label', 'Agendamento')}{score_info}")
+    
+    if st.button("🗑️ Limpar histórico", key="btn_clear_history_final", use_container_width=True):
+        st.session_state.completed_attachments = []
+        st.rerun()
+
+# Rodapé
+st.divider()
+st.caption("🔧 Ferramenta de anexação de arquivos ao Nibo • Busque agendamentos → Faça upload → Confirme correspondências")
