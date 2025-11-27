@@ -211,36 +211,37 @@ def group_by_due_date(results):
 
 def find_nf_number_in_string(text):
     """Extrai possíveis números de NF de um texto"""
-    # Padrão para NF: números de 5-9 dígitos, podendo ter prefixos como NF:, NFe
+    # Padrão para NF: ignora zeros à esquerda
     patterns = [
-        r'NF:?\s*0*(\d{7,9})(?:-\d+)?', # NF: 003126473 ou NF: 3126473-1 (7-9 dígitos)
-        r'NFe:?\s*0*(\d{7,9})(?:-\d+)?', # NFe 003126473 ou NFe 3126473-1
-        r'DANFE\s*0*(\d{7,9})(?:-\d+)?', # DANFE 003126473 ou DANFE 3126473-1
-        r'Nota\s*Fiscal\s*:?\s*0*(\d{7,9})(?:-\d+)?', # Nota Fiscal: 003126473
+        r'NF:?\s*0*([1-9]\d{6,8})(?:-\d+)?',              # NF: 003145455 -> captura 3145455
+        r'NFe:?\s*0*([1-9]\d{6,8})(?:-\d+)?',             # NFe 003145455 -> captura 3145455
+        r'DANFE\s*0*([1-9]\d{6,8})(?:-\d+)?',             # DANFE 003145455 -> captura 3145455
+        r'Nota\s*Fiscal\s*:?\s*0*([1-9]\d{6,8})(?:-\d+)?', # Nota Fiscal: 003145455 -> captura 3145455
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)
         if matches:
-            # Remove zeros à esquerda do número capturado
-            return matches[0].lstrip('0') or '0'
+            return matches[0]  # Já vem sem zeros à esquerda pelo padrão [1-9]\d{...}
     
     return None
 
 def find_nf_number_in_filename(filename):
     """Extrai número de NF de um nome de arquivo"""
-    # Padrão comum para arquivos de NF (7-9 dígitos)
+    # Remove extensão do arquivo
+    filename_no_ext = filename.rsplit('.', 1)[0]
+    
+    # Padrão para capturar: zeros à esquerda (fora do grupo) + número (dentro do grupo)
     patterns = [
-        r'0*(\d{7,9})(?:-\d+)?', # 003126473 ou 003145454-1 (7-9 dígitos)
-        r'NF0*(\d{7,9})(?:-\d+)?', # NF3126473 ou NF3145454-1
-        r'NFe0*(\d{7,9})(?:-\d+)?', # NFe3126473 ou NFe3145454-1
+        r'(?:^|[^0-9])0*([1-9]\d{6,8})(?:-\d+)?',  # 003145455 -> captura 3145455 (sem zeros à esquerda)
+        r'NF:?\s*0*([1-9]\d{6,8})(?:-\d+)?',       # NF 003145455 -> captura 3145455
+        r'NFe:?\s*0*([1-9]\d{6,8})(?:-\d+)?',      # NFe 003145455 -> captura 3145455
     ]
     
     for pattern in patterns:
-        matches = re.findall(pattern, filename, re.IGNORECASE)
+        matches = re.findall(pattern, filename_no_ext, re.IGNORECASE)
         if matches:
-            # Remove zeros à esquerda do número capturado
-            return matches[0].lstrip('0') or '0'
+            return matches[0]  # Já vem sem zeros à esquerda pelo padrão [1-9]\d{...}
     
     return None
 
@@ -369,10 +370,11 @@ with st.sidebar:
     enable_auto_match = st.toggle("Habilitar conciliação automática", value=True)
     match_threshold = st.slider(
         "Limiar de correspondência", 
-        min_value=30, 
+        min_value=100, 
         max_value=100,
         value=100,
-        help="Pontuação mínima para considerar uma correspondência válida. 100 = apenas correspondências perfeitas (fornecedor + NF)"
+        disabled=True,
+        help="Fixado em 100% - apenas correspondências perfeitas (fornecedor IMPAKTO + número de NF idêntico)"
     )
     
     st.caption(f"Fornecedor fixo: IMPAKTO SIST DE LIMPEZA E DESC LTDA")
@@ -687,7 +689,13 @@ if st.session_state.auto_matches:
 else:
     # Mensagem quando não há correspondências
     if st.session_state.uploaded_files and st.session_state.last_results:
-        st.info("ℹ️ Nenhuma correspondência automática encontrada. Você pode anexar manualmente usando a seção acima.")
+        st.warning("⚠️ **Nenhuma correspondência automática encontrada**")
+        st.info("""
+        **Motivos possíveis:**
+        - O número da NF no arquivo não corresponde a nenhum agendamento da IMPAKTO
+        - Verifique se os números de NF nos arquivos estão corretos
+        - Exemplo: arquivo `003145455-1-danfe.pdf` precisa de um agendamento com "NF: 3145455" na descrição
+        """)
 
 # Histórico de anexações
 if st.session_state.completed_attachments:
