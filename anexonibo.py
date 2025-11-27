@@ -263,21 +263,28 @@ def calculate_match_score(schedule_item, filename, supplier_id=None):
             return 0, "Fornecedor não corresponde - ignorado"
         
         score += 30
-        reason += "Fornecedor IMPAKTO corresponde (+30). "
+        reason += "Fornecedor IMPAKTO (+30). "
     
     # PRIORIDADE 2: Extrai e compara números de NF
     description = schedule_item.get("description", "")
     nf_in_description = find_nf_number_in_string(description)
     nf_in_filename = find_nf_number_in_filename(filename)
     
+    # DEBUG: adiciona info sobre números extraídos
+    if nf_in_filename:
+        reason += f"NF arquivo: {nf_in_filename}. "
+    if nf_in_description:
+        reason += f"NF descrição: {nf_in_description}. "
+    
     if nf_in_description and nf_in_filename and nf_in_description == nf_in_filename:
         score += 70
-        reason += f"Número de NF ({nf_in_description}) encontrado em ambos (+70). "
-    
-    # PRIORIDADE 3: Verifica palavras-chave comuns (apenas NF e DANFE são relevantes)
-    if "NF" in description.upper():
-        score += 5
-        reason += "Palavra-chave 'NF' na descrição (+5). "
+        reason += f"Números correspondem (+70). "
+    elif nf_in_filename and not nf_in_description:
+        reason += "NF não encontrada na descrição. "
+    elif nf_in_description and not nf_in_filename:
+        reason += "NF não encontrada no arquivo. "
+    elif nf_in_description and nf_in_filename:
+        reason += f"Números DIFERENTES. "
     
     return score, reason.strip()
 
@@ -290,13 +297,14 @@ def auto_match_files_to_schedules(uploaded_files, schedules, supplier_id=None, t
     
     for file in uploaded_files:
         best_match = None
-        best_score = threshold
+        best_score = 0  # Começa com 0 ao invés do threshold
         best_reason = ""
         best_schedule = None
         
         for schedule in schedules:
             score, reason = calculate_match_score(schedule, file["name"], supplier_id)
-            if score > best_score:
+            # Só considera se a pontuação for maior que o threshold E maior que a melhor até agora
+            if score >= threshold and score > best_score:
                 sid = schedule.get("id") or schedule.get("scheduleId") or schedule.get("Id")
                 best_match = sid
                 best_score = score
